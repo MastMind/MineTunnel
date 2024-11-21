@@ -1,0 +1,15 @@
+{
+    proto : "udp",
+    port : 4880,
+    tunnels : [
+        {
+          remote : "192.168.1.100",
+          local : "192.168.1.101",
+          proto : "udp",
+          mode : "tun",
+          device : "tun0",
+          bringup_script : "script1_start.sh",
+          shutdown_script : "script1_stop.sh"
+        }
+    ]
+}
