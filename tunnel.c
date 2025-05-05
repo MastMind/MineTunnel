@@ -284,6 +284,17 @@ static int build_tunnels(config_t* cfg) {
         return -5;
     }
 
+    epoll_fd = epoll_create(1);
+
+    if (epoll_fd < 0) {
+        PrintError("epoll init failed\n");
+        return -1;
+    }
+
+#ifdef DEBUG
+    fprintf(stdout, "epoll_fd is %d\n", epoll_fd);
+#endif
+
     for (uint16_t i = 0; i < cfg->tunnels_count; i++) {
         tunnel_entity_t tun;
         tunnel_entity_t* found_tun = NULL;
@@ -325,18 +336,21 @@ static int build_tunnels(config_t* cfg) {
             if (!found_encryptor_entity) {
                 PrintError("Can't find encryptor %s\n", search_entity.name);
             } else {
-                if (found_encryptor_entity->set_params(tun_info->encryption_params)) {
-                    PrintError("Can't set encryption params for encryptor %s and for tunnel with local ip %u.%u.%u.%u and remote ip %u.%u.%u.%u\n", search_entity.name,
-                                                                                                                                                    tun_info->local_endpoint.addr[0],
-                                                                                                                                                    tun_info->local_endpoint.addr[1],
-                                                                                                                                                    tun_info->local_endpoint.addr[2],
-                                                                                                                                                    tun_info->local_endpoint.addr[3],
-                                                                                                                                                    tun_info->remote_endpoint.addr[0],
-                                                                                                                                                    tun_info->remote_endpoint.addr[1],
-                                                                                                                                                    tun_info->remote_endpoint.addr[2],
-                                                                                                                                                    tun_info->remote_endpoint.addr[3]);
+                int encryptor_id = found_encryptor_entity->set_params(tun_info->encryption_params);
+                if (encryptor_id < 0) {
+                    PrintError("Can't set encryption params for encryptor %s and for tunnel with local ip %u.%u.%u.%u and remote ip %u.%u.%u.%u\nError code: %d\n", search_entity.name,
+                                                                                                                                                                    tun_info->local_endpoint.addr[0],
+                                                                                                                                                                    tun_info->local_endpoint.addr[1],
+                                                                                                                                                                    tun_info->local_endpoint.addr[2],
+                                                                                                                                                                    tun_info->local_endpoint.addr[3],
+                                                                                                                                                                    tun_info->remote_endpoint.addr[0],
+                                                                                                                                                                    tun_info->remote_endpoint.addr[1],
+                                                                                                                                                                    tun_info->remote_endpoint.addr[2],
+                                                                                                                                                                    tun_info->remote_endpoint.addr[3],
+                                                                                                                                                                    encryptor_id);
                 } else {
                     tun.encryptor = found_encryptor_entity;
+                    tun.encryptor_id = encryptor_id;
                 }
             }
         }
@@ -349,9 +363,9 @@ static int build_tunnels(config_t* cfg) {
                 found_tun->tun_intf.mode != tun_info->mode ||
                 strncmp(found_tun->tun_intf.tun_name, tun_info->dev_name, MAX_DEV_NAME_LENGTH)) {
                 PrintError("Bad duplicate tunnel with local ip %u.%u.%u.%u\nOptions proto, mode and name should be equal\n", tun_info->local_endpoint.addr[0],
-                                                                                                                            tun_info->local_endpoint.addr[1],
-                                                                                                                            tun_info->local_endpoint.addr[2],
-                                                                                                                            tun_info->local_endpoint.addr[3]);
+                                                                                                                             tun_info->local_endpoint.addr[1],
+                                                                                                                             tun_info->local_endpoint.addr[2],
+                                                                                                                             tun_info->local_endpoint.addr[3]);
                 free(new_endpoint);
                 return -2;
             }
@@ -473,18 +487,6 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
     uint32_t socketbuffsize = SOCKET_SIZE;
 
     struct sockaddr_in serveraddr;
-
-    epoll_fd = epoll_create(1);
-
-    if (epoll_fd < 0) {
-        PrintError("epoll init failed\n");
-        err = -1;
-        goto err_label;
-    }
-
-#ifdef DEBUG
-    fprintf(stdout, "epoll_fd is %d\n", epoll_fd);
-#endif
 
     //init sockets
     switch (tun_info->proto) {
