@@ -28,6 +28,16 @@ int CheckRoot();
 int IsFileExists(const char* filename);
 void ExecScript(const char* filename);
 int SetIngoreICMPEcho(int ignore);
+uint32_t tunnel_hash_func(void* data);
+int tunnel_cmp_func(void* arg1, void* arg2);
+uint32_t endpoint_hash_func(void* data);
+int endpoint_cmp_func(void* arg1, void* arg2);
+uint32_t tun_map_hash_func(void* data);
+int tun_map_cmp_func(void* arg1, void* arg2);
+uint32_t encryptor_hash_func(void* data);
+int encryptor_cmp_func(void* arg1, void* arg2);
+uint32_t tun_cache_hash_func(void* data);
+int tun_cache_cmp_func(void* arg1, void* arg2);
 
 
 #endif

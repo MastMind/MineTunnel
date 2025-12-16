@@ -12,7 +12,7 @@ Just run make in the folder with cloned project. The gcc 12 is recommended but t
 For running the application requires root privilegies (need for granting acces to /dev/net/tun)
 
 # How to use it
-After building the binary you need to write a config file (the example config you can find in examples folder). A config file is a JSON file with the next structure:
+After building the binary you need to write a config file (the example config you can find in examples folder). The config file is a JSON file with the next structure:
 
 ```
 {
@@ -41,7 +41,7 @@ After building the binary you need to write a config file (the example config yo
 }
 ```
 
-Where `proto` in root node is tunnel's proto by default, `port` in root node is default port and `encryption_plugins` is array of encryptors (object with name field and path to the encryptor's so; name is unique for encryptor and using as identificator). Available proto's values now: udp, icmp. The array `tunnels` describes all tunnels which have to be created in system. Descriptions of each parameter:
+Where `proto` in root node is tunnel's proto by default, `port` in root node is default port and `encryption_plugins` is array of encryptors (object with name field and path to the encryptor's so; name is unique for encryptor and using as an identificator). Available proto's values now: udp, icmp. The array `tunnels` describes all tunnels which have to be created in system. Descriptions of each parameter:
 
 - `remote` - ip address of the remote endpoint. Also available syntax in format "192.168.1.101:5555" where 5555 is port value. If port is not setted then the default port value will be used as a port.
 - `local` - ip address of the local interface which have to be used as VTEP (do not recommend use 0.0.0.0 as listening of all interfaces; better to use specific local ip of available network interface). Also available syntax in format "192.168.1.101:5555" (like for remote parameter)
@@ -50,19 +50,19 @@ Where `proto` in root node is tunnel's proto by default, `port` in root node is 
 - `device` - override the name of created virtual interface in system. This is optional parameter. If it is not setted then new interfaces will have name mine_tun\<num\> or mine_tap\<num\> (depends of the type). \<num\> is the ordered number which begins from 0
 - `bringup_script` - path to the script in the OS which will be executed after bringing up the virtual interface.
 - `shutdown_script` - path to the script in the OS which will be executed before stopping the interface.
-- `icmp_id` - value of icmpid field in icmp header for echo request packets. This filed makes sense only for icmp tunnels. For udp tunnels this parameter will be ignored. This is optional parameter and by default it's equal to 1234
-- `encryption` - optional parameter which switches on the encryption for tunnels. If this parameter is setted the `encryption_params` option is necessary. Value must has name from `encryption_plugins` array.
-- `encryption_params` - custom paramaeter and has not the constant structure. Value of this parameter depends of the selected `encryption_plugin`. More detailed about encryption texted below.
+- `icmp_id` - value of icmpid field in icmp header for echo request packets. This field makes sense only for icmp tunnels. For udp tunnels this parameter will be ignored. This is optional parameter and by default it's equal to the value 1234
+- `encryption` - optional parameter which switches on the encryption of tunnel. If this parameter is setted the `encryption_params` option is necessary. The value must have a name from the `encryption_plugins` array.
+- `encryption_params` - the custom parameter and has not the constant structure. The value of this parameter depends of the selected `encryption_plugin`. More detailed about encryption texted below.
 
-The config can contain more than one tunnel. For implementing this it needs to add the new tunnel's JSON object into the `tunnels` array. Each tunnel will run within a separate thread (one thread per tunnel). Also it has functionality about the global bringup and shutdown scripts (like for tunnel but for root's JSON node). The global `bringup_script` will be executed AFTER bringing up of the all tunnels and the global `shutdown_script` will be executed BEFORE stopping of the all tunnels.
+The config can contain more than one tunnel. For implementing this it requires to add new tunnel's JSON object into the `tunnels` array. Each tunnel will be executed within a separate thread (one thread per tunnel). Also it has functionality about the global bringup and shutdown scripts (like for a tunnel but it has to be described in root's JSON node). The global `bringup_script` will be executed AFTER bringing up of the all tunnels and the global `shutdown_script` will be executed BEFORE stopping of the all tunnels.
 
-The next step is just running in console with the next command:
+The next step is just execute the next command in a terminal:
 
 ```
 sudo ./minetunnel --config config.json
 ```
 
-The available command line options (or help text by the command `./minetunnel --help`):
+The available command line options are (or help text by the command `./minetunnel --help`):
 
 ```
 Usage: ./minetunnel [options]
@@ -78,7 +78,7 @@ Here the basic examples with basic scenarios. The configs for each example are l
 
 ## Point-to-Point UDP tunnel
 
-The trivial simplest case. This scenario is the gist of tunneling. Let's draw the topo:
+The simplest case. This scenario displays the gist of tunneling. Let's draw the topo:
 
 
             tun0                                                 tun0
@@ -93,7 +93,7 @@ The trivial simplest case. This scenario is the gist of tunneling. Let's draw th
              |                                                    |
              |-----------------(UDP port 4880)--------------------|
 
-Here displayed two hosts with ip's on the exeternal interface (or VTEPS) where the virtual network 10.10.10.0/24 have to be created.
+Here displayed two hosts with ip's on the exeternal interfaces (or VTEPS) where the virtual network 10.10.10.0/24 have to be created.
 The config for the Host1:
 
 ```
@@ -182,7 +182,7 @@ exit 0
 
 ```
 
-The last step - run in console (it's command for both hosts):
+The last step - run in a terminal (it's command for both hosts):
 
 ```
 sudo ./minetunnel --config config.json
@@ -192,7 +192,7 @@ For creating ICMP tunnel just replace `proto` value from udp to icmp and add `ic
 
 ## Point-to-Multipoint UDP tunnel (or triangle topology)
 
-This is unusual case where it needs to union more than two nodes into one subnet without server (OpenVPN has special server node and several host can be connected into the one virtual network via this node for this purposes but minetunnel is a serverless solution).
+This is unusual case where it requires to union more than two nodes into one subnet without the server (OpenVPN has the special server node and several hosts can be connected into the one virtual network via this node but in general minetunnel is a serverless solution).
 
 
             tun0                                                 tun0
@@ -218,7 +218,7 @@ This is unusual case where it needs to union more than two nodes into one subnet
                                      |
                                     tun0
 
-Just the same scheme but the Host3 connected to others. In few words any host directly connected to others. The configuration have to be expanded.  
+Just the same scheme but the Host3 connected to others. In few words any host directly connected to others. The configuration has to be expanded.  
 The config for the Host1:
 
 ```
@@ -278,7 +278,7 @@ For the Host2 the config looks similar:
 }
 ```
 
-And for the Host3 it has the same logic:
+And for the Host3 it has almost the same containing:
 
 ```
 {
@@ -311,7 +311,7 @@ By this principle the virtual network can be expanded to more clients. The helpe
 
 # Encryption
 
-The app supports encryption. Any encryption is presented as encryption plugins. An encryption pluging is a special `.so` library with specific external functions. More detailed about how to write a custom encryption plugin [here](https://github.com/MastMind/MineTunnel_xor_encryptor "xor encryption example"). The tunnels in encryption mode will be encrypted by plugin's algorythm (it means all packet will be encrypted). It supports only symmetric encyptions (asymetric will be available in future).  
+The app supports encryption. Any encryption is presented as encryption plugins. An encryption pluging is a special `.so` library with the specific external functions. More detailed about how to write a custom encryption plugin [here](https://github.com/MastMind/MineTunnel_xor_encryptor "xor encryption example"). The tunnels in encryption mode will be encrypted by plugin's algorythm (it means all packets will be encrypted). It supports only symmetric encryptions (asymetric will be available in future).  
 For adding encryption it requires to register an encryption plugin in general section at the first order:
 ```
 encryption_plugins : [
@@ -326,4 +326,4 @@ encryption_params : {
     key : "abcd"
 }
 ```
-The `encryption_params` is a very specific value. It is necessary parameter when added the parameter `encryption`. The value's format depends of the choosen `encryption` and the JSON's object in value will parsing by encryption plugin. Here the xor plugin is using and it requires `key_length` and `key` parameters. See more detailed information about the loaded encryption plugin for correct configuring.
+The `encryption_params` is a very specific value. It is necessary parameter if the parameter `encryption` is added. The value's format depends of the choosen `encryption` and the JSON's object in value will be parsed by encryption plugin. Here the xor plugin is using and it requires `key_length` and `key` parameters. See more detailed information about the loaded encryption plugin for the correct configuring.

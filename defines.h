@@ -18,6 +18,8 @@
 #define MAX_PROTO_LENGTH 8
 #define MAX_TUNMODE_LENGTH 4
 #define IPV4_ADDR_LENGTH 4
+#define IPV6_ADDR_LENGTH 16
+#define MAC_ADDR_LENGTH 6
 #define PORT_LENGTH 2
 #define MAX_TUNNELS 256
 #define EPOLL_TIMEOUT 5000
@@ -37,8 +39,23 @@
 //network types
 typedef union {
     uint32_t value;
-    uint8_t addr[4];
+    uint8_t addr[IPV4_ADDR_LENGTH];
 } ipv4_addr;
+
+typedef union {
+    uint8_t addr[IPV6_ADDR_LENGTH];
+    uint32_t value[IPV6_ADDR_LENGTH / 4];
+} ipv6_addr;
+
+typedef union {
+    uint64_t value;
+    uint8_t addr[MAC_ADDR_LENGTH];
+} mac_addr;
+
+typedef struct tunnel_endpoint_s {
+    ipv4_addr remote_endpoint;
+    uint16_t remote_port;
+} tunnel_endpoint_t;
 
 typedef enum tun_proto_e {
     PROTO_NONE = 0,

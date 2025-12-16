@@ -48,14 +48,6 @@ static int build_tunnels(config_t* cfg);
 static int load_encryptors(config_t* cfg);
 static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info);
 static int add_tun_map(int fd, tunnel_entity_t* tun);
-
-static uint32_t tunnel_hash_func(void* data);
-static int tunnel_cmp_func(void* arg1, void* arg2);
-static uint32_t endpoint_hash_func(void* data);
-static uint32_t tun_map_hash_func(void* data);
-static int tun_map_cmp_func(void* arg1, void* arg2);
-static uint32_t encryptor_hash_func(void* data);
-static int encryptor_cmp_func(void* arg1, void* arg2);
 static int tunnel_poll();
 static void tunnel_stop(void* arg);
 static void encryptor_release(void* arg);
@@ -370,8 +362,8 @@ static int build_tunnels(config_t* cfg) {
                 return -2;
             }
 
-            hash_table_add(&found_tun->remote_endpoint_ht, new_endpoint, &endpoint_hash_func);
             bhlist_push_front(&found_tun->remote_endpoint_list, new_endpoint);
+            hash_table_add(&found_tun->remote_endpoint_ht, found_tun->remote_endpoint_list, &endpoint_hash_func);
         } else {
             tunnel_entity_t* new_tun = (tunnel_entity_t*)malloc(sizeof(tunnel_entity_t));
 
@@ -383,8 +375,8 @@ static int build_tunnels(config_t* cfg) {
 
             memcpy(new_tun, &tun, sizeof(tunnel_entity_t));
 
-            hash_table_add(&new_tun->remote_endpoint_ht, new_endpoint, &endpoint_hash_func);
             bhlist_push_front(&new_tun->remote_endpoint_list, new_endpoint);
+            hash_table_add(&new_tun->remote_endpoint_ht, new_tun->remote_endpoint_list, &endpoint_hash_func);
 
             //start tunnel in system here
             if (init_tun_intf(new_tun, tun_info)) {
@@ -493,7 +485,6 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
         case PROTO_UDP:
             // Init SOCK_RAW for output UDP packets:
             intf->raw_socket_out = socket(AF_INET, SOCK_RAW, IPPROTO_UDP);
-            ///raw_socket_out = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
             if (intf->raw_socket_out < 0) {
                 intf->raw_socket_out = 0;
                 PrintError("Can't create UDP output raw socket\n");
@@ -516,6 +507,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
                 err = -7;
                 goto err_label;
             }
+
             if (setsockopt(intf->raw_socket_in, SOL_SOCKET, SO_SNDBUF, &socketbuffsize, sizeof(socketbuffsize)) < 0) {
                 PrintError("Can't set socket options for UDP input raw socket\n");
                 err = -8;
@@ -726,6 +718,17 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
         evlist_count++;
     }
 
+    //create worker on tunnel
+    tun->worker = (worker_t*)malloc(sizeof(worker_t));
+
+    if (!tun->worker) {
+        PrintError("Internal error. Can't alloc memory for the worker of tunnel\n");
+        err = -29;
+        goto err_label;
+    }
+
+    task_create_worker(tun->worker);
+
     return 0;
 
 err_label:
@@ -754,20 +757,10 @@ static int add_tun_map(int fd, tunnel_entity_t* tun) {
 
     tun_map->fd = fd;
     tun_map->tun = tun;
-    tun_map->worker = (worker_t*)malloc(sizeof(worker_t));
-
-    if (!tun_map->worker) {
-        free(tun_map);
-        PrintError("Internal error. Can't alloc memory for the worker of tunnel map\n");
-        return -2;
-    }
-
-    task_create_worker(tun_map->worker);
 
     //search for duplicate
     if (hash_table_find(&sck_tun_ht, tun_map, &tun_map_hash_func, &tun_map_cmp_func)) {
         PrintError("Found duplicate for tunnel map: fd %d\n", fd);
-        free(tun_map->worker);
         free(tun_map);
         return -3;
     }
@@ -779,62 +772,6 @@ static int add_tun_map(int fd, tunnel_entity_t* tun) {
 #endif
 
     return 0;
-}
-
-static uint32_t tunnel_hash_func(void* data) {
-    tunnel_entity_t* tun = (tunnel_entity_t*)data;
-
-    unsigned char hash_str[IPV4_ADDR_LENGTH + PORT_LENGTH] = { 0 };
-
-    memcpy(hash_str, &tun->local_endpoint.value, IPV4_ADDR_LENGTH);
-    memcpy(hash_str + IPV4_ADDR_LENGTH, &tun->local_port, PORT_LENGTH);
-
-    return crc32_calc(hash_str, IPV4_ADDR_LENGTH + PORT_LENGTH);
-}
-
-static int tunnel_cmp_func(void* arg1, void* arg2) {
-    tunnel_entity_t* tun1 = (tunnel_entity_t*)arg1;
-    tunnel_entity_t* tun2 = (tunnel_entity_t*)arg2;
-
-    return (tun1->local_endpoint.value == tun2->local_endpoint.value &&
-        tun1->local_port == tun2->local_port) ? 0 : 1;
-}
-
-static uint32_t endpoint_hash_func(void* data) {
-    tunnel_endpoint_t* endpoint = (tunnel_endpoint_t*)data;
-
-    unsigned char hash_str[IPV4_ADDR_LENGTH + PORT_LENGTH] = { 0 };
-
-    memcpy(hash_str, &endpoint->remote_endpoint.value, IPV4_ADDR_LENGTH);
-    memcpy(hash_str + IPV4_ADDR_LENGTH, &endpoint->remote_port, PORT_LENGTH);
-
-    return crc32_calc(hash_str, IPV4_ADDR_LENGTH + PORT_LENGTH);
-}
-
-static uint32_t tun_map_hash_func(void* data) {
-    fd_tun_map_t* tun_map = (fd_tun_map_t*)data;
-
-    return (uint32_t)tun_map->fd;
-}
-
-static int tun_map_cmp_func(void* arg1, void* arg2) {
-    fd_tun_map_t* tun_map_1 = (fd_tun_map_t*)arg1;
-    fd_tun_map_t* tun_map_2 = (fd_tun_map_t*)arg2;
-
-    return (tun_map_1->fd == tun_map_2->fd) ? 0 : 1;
-}
-
-static uint32_t encryptor_hash_func(void* data) {
-    enc_entinty_t* encryptor = (enc_entinty_t*)data;
-
-    return crc32_calc((unsigned char*)encryptor->name, strlen(encryptor->name));
-}
-
-static int encryptor_cmp_func(void* arg1, void* arg2) {
-    enc_entinty_t* encryptor1 = (enc_entinty_t*)arg1;
-    enc_entinty_t* encryptor2 = (enc_entinty_t*)arg2;
-
-    return strncmp(encryptor1->name, encryptor2->name, MAX_ENCRYPTOR_NAME); 
 }
 
 static int tunnel_poll() {
@@ -871,10 +808,30 @@ static int tunnel_poll() {
                 if (found_tun_map) {
                     //create task with socket i argument and tunnel entity
                     task_t* new_task = NULL;
+                    tunnel_entity_t* current_tun = found_tun_map->tun;
+                    struct sockaddr_in remote_addr;
+                    socklen_t remote_len = sizeof(remote_addr);
+                    ssize_t bytes = 0;
+                    int remote_endpoint_flag = 0;
 
-                    task_get_new(found_tun_map->worker, &new_task);  //get new task identity and fill it below
-
-                    ssize_t bytes = read(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer));
+                    task_get_new(current_tun->worker, &new_task);  //get new task identity and fill it below
+                    if (found_tun_map->fd == current_tun->tun_intf.raw_socket_in) { //read from underlay network
+                        switch (current_tun->tun_intf.proto) {
+                            case PROTO_UDP:
+                                bytes = recvfrom(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer), 0,
+                                    (struct sockaddr *)&remote_addr, &remote_len);
+                                remote_endpoint_flag = 1;
+                                break;
+                            case PROTO_ICMP:
+                                bytes = read(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer));
+                                break;
+                            default:
+                                PrintError("Can't receive packet. Unknown tunnel proto.\n");
+                                break;
+                        }
+                    } else {
+                        bytes = read(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer));
+                    }
 
                     if (bytes <= 0) {
                         PrintError("Something went wrong in the receiving packets\n");
@@ -883,12 +840,18 @@ static int tunnel_poll() {
 
                     new_task->tun_map = found_tun_map;
                     new_task->size = bytes;
+                    new_task->endpoint_flag = remote_endpoint_flag;
 #ifdef DEBUG
                     fprintf(stdout, "Accepted packet: \n");
                     PrintBuffer((unsigned char*)new_task->buffer, bytes);
 #endif
+                    //add endpoint addr info to task (if received from underlay network)
+                    if (remote_endpoint_flag) {
+                        new_task->endpoint.remote_endpoint.value = remote_addr.sin_addr.s_addr;
+                        new_task->endpoint.remote_port = ntohs(remote_addr.sin_port);
+                    }
 
-                    task_add(found_tun_map->worker); //mark filled task indentity on execution
+                    task_add(current_tun->worker);
                 }
             }
         }
@@ -905,8 +868,8 @@ static void tunnel_stop(void* arg) {
         ExecScript(tun->shutdown_script);
     }
 
-    hash_table_clear(&tun->remote_endpoint_ht, NULL);
     bhlist_clear(tun->remote_endpoint_list, NULL);
+    hash_table_clear(&tun->remote_endpoint_ht, NULL);
 
     if (tun->tun_intf.raw_socket_in) {
         close(tun->tun_intf.raw_socket_in);

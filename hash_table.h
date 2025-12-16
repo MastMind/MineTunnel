@@ -23,7 +23,7 @@ struct hash_table {
 void hash_table_add(hash_table_t** hash_table, void* data, uint32_t (*hash_func)(void* data));
 hash_table_t* hash_table_add_r(hash_table_t** hash_table, void* data, uint32_t (*hash_func)(void* data));
 void* hash_table_find(hash_table_t** hash_table, void* data, uint32_t (*hash_func)(void* data), int (*cmp_func)(void*, void*));
-void hash_table_del_element(hash_table_t** hash_table, void* data, uint32_t (*hash_func)(void* data), int (*cmp_func)(void*, void*), 
+void hash_table_del_element(hash_table_t** hash_table, void* data, uint32_t (*hash_func)(void* data), int (*cmp_func)(void*, void*),
                             void (*free_record)(void*));
 void hash_table_del(hash_table_t** hash_table, void (*free_record)(void*));
 void hash_table_clear(hash_table_t** hash_table, void (*free_record)(void*));

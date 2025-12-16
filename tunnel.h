@@ -40,11 +40,6 @@ typedef struct enc_entinty_s {
     int (*set_params)(const char*);
 } enc_entinty_t;
 
-typedef struct tunnel_endpoint_s {
-    ipv4_addr remote_endpoint;
-    uint16_t remote_port;
-} tunnel_endpoint_t;
-
 typedef struct tunnel_entity_s {
     ipv4_addr local_endpoint;
     uint16_t local_port;
@@ -56,12 +51,12 @@ typedef struct tunnel_entity_s {
     char shutdown_script[PATH_MAX];
     enc_entinty_t* encryptor;
     int encryptor_id;
+    worker_t* worker;
 } tunnel_entity_t;
 
 typedef struct fd_tun_map_s {
     int fd;
     tunnel_entity_t* tun;
-    worker_t* worker;
 } fd_tun_map_t;
 
 int tunnel_parse_opts(int argc, char** argv);
