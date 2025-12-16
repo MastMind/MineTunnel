@@ -307,6 +307,10 @@ static int build_tunnels(config_t* cfg) {
         new_endpoint->remote_endpoint.value = tun_info->remote_endpoint.value;
         new_endpoint->remote_port = tun_info->remote_port;
 
+        if (tun_info->proto == PROTO_ICMP) {
+            new_endpoint->remote_port = tun_info->icmp_id;
+        }
+
         memset(&tun.tun_intf, 0, sizeof(tun_intf_t));
 
         strncpy(tun.tun_intf.tun_name, tun_info->dev_name, MAX_DEV_NAME_LENGTH);

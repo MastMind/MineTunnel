@@ -210,7 +210,7 @@ static void *thread_func(void *param) {
 
                     current_task->endpoint_flag = 1;
                     current_task->endpoint.remote_endpoint.value = iphdr->ip_src.s_addr;
-                    current_task->endpoint.remote_port = ntohs(icmphdr->icmp_id); //id is equal to port in ICMP mode
+                    current_task->endpoint.remote_port = icmphdr->icmp_id; //id is equal to port in ICMP mode
 
                     update_cache(worker, current_task->buffer + sizeof(struct ip) + sizeof(struct icmp), current_task->size - (sizeof(struct ip) + sizeof(struct icmp)),
                         current_tun, &current_task->endpoint);
@@ -441,7 +441,7 @@ static ssize_t recv_icmp(int tun_socket, char* recvbuf, uint16_t size, ipv4_addr
     ssize_t tx_len = 0;
 
     if (local_endpoint.value == iphdr->ip_dst.s_addr &&
-        local_port == ntohs(icmphdr->icmp_id)) { //check if it is addresed to the local endpoint
+        local_port == icmphdr->icmp_id) { //check if it is addresed to the local endpoint
         tx_len = write(tun_socket, recvbuf + sizeof(struct ip) + sizeof(struct icmp), size - (sizeof(struct ip) + sizeof(struct icmp)));
     }
 
