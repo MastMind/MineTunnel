@@ -332,21 +332,20 @@ static int build_tunnels(config_t* cfg) {
             if (!found_encryptor_entity) {
                 PrintError("Can't find encryptor %s\n", search_entity.name);
             } else {
-                int encryptor_id = found_encryptor_entity->set_params(tun_info->encryption_params);
-                if (encryptor_id < 0) {
-                    PrintError("Can't set encryption params for encryptor %s and for tunnel with local ip %u.%u.%u.%u and remote ip %u.%u.%u.%u\nError code: %d\n", search_entity.name,
-                                                                                                                                                                    tun_info->local_endpoint.addr[0],
-                                                                                                                                                                    tun_info->local_endpoint.addr[1],
-                                                                                                                                                                    tun_info->local_endpoint.addr[2],
-                                                                                                                                                                    tun_info->local_endpoint.addr[3],
-                                                                                                                                                                    tun_info->remote_endpoint.addr[0],
-                                                                                                                                                                    tun_info->remote_endpoint.addr[1],
-                                                                                                                                                                    tun_info->remote_endpoint.addr[2],
-                                                                                                                                                                    tun_info->remote_endpoint.addr[3],
-                                                                                                                                                                    encryptor_id);
+                void *encryptor_instance = found_encryptor_entity->create_instance(tun_info->encryption_params);
+                if (!encryptor_instance) {
+                    PrintError("Can't set encryption params for encryptor %s and for tunnel with local ip %u.%u.%u.%u remote ip %u.%u.%u.%u\n", search_entity.name,
+                                                                                                                                                tun_info->local_endpoint.addr[0],
+                                                                                                                                                tun_info->local_endpoint.addr[1],
+                                                                                                                                                tun_info->local_endpoint.addr[2],
+                                                                                                                                                tun_info->local_endpoint.addr[3],
+                                                                                                                                                tun_info->remote_endpoint.addr[0],
+                                                                                                                                                tun_info->remote_endpoint.addr[1],
+                                                                                                                                                tun_info->remote_endpoint.addr[2],
+                                                                                                                                                tun_info->remote_endpoint.addr[3]);
                 } else {
                     tun.encryptor = found_encryptor_entity;
-                    tun.encryptor_id = encryptor_id;
+                    tun.encryptor_instance = encryptor_instance;
                 }
             }
         }
@@ -448,9 +447,15 @@ static int load_encryptors(config_t* cfg) {
             goto err;
         }
 
-        encryptor->set_params = dlsym(encryptor->shared_library_handle, "set_params");
-        if (!encryptor->set_params) {
+        encryptor->create_instance = dlsym(encryptor->shared_library_handle, "create_instance");
+        if (!encryptor->create_instance) {
             ret = -6;
+            goto err;
+        }
+
+        encryptor->destroy_instance = dlsym(encryptor->shared_library_handle, "destroy_instance");
+        if (!encryptor->destroy_instance) {
+            ret = -7;
             goto err;
         }
 
@@ -885,6 +890,11 @@ static void tunnel_stop(void* arg) {
 
     if (tun->tun_intf.tun_fd) {
         close(tun->tun_intf.tun_fd);
+    }
+
+    //free encryptor instance
+    if (tun->encryptor && tun->encryptor_instance) {
+        tun->encryptor->destroy_instance(tun->encryptor_instance);
     }
 }
 

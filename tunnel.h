@@ -34,10 +34,11 @@ typedef struct tun_intf_s {
 typedef struct enc_entinty_s {
     char name[MAX_ENCRYPTOR_NAME];
     void* shared_library_handle;
-    uint32_t (*encrypt)(int, char*, uint32_t);
-    uint32_t (*decrypt)(int, char*, uint32_t);
+    uint32_t (*encrypt)(void*, char*, uint32_t);
+    uint32_t (*decrypt)(void*, char*, uint32_t);
     encryptor_type_t (*get_type)(void);
-    int (*set_params)(const char*);
+    void* (*create_instance)(const char*);
+    void (*destroy_instance)(void*);
 } enc_entinty_t;
 
 typedef struct tunnel_entity_s {
@@ -50,7 +51,7 @@ typedef struct tunnel_entity_s {
     char bringup_script[PATH_MAX];
     char shutdown_script[PATH_MAX];
     enc_entinty_t* encryptor;
-    int encryptor_id;
+    void* encryptor_instance;
     worker_t* worker;
 } tunnel_entity_t;
 

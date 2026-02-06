@@ -154,7 +154,7 @@ static void *thread_func(void *param) {
             enc_entinty_t* current_encryptor = current_tun->encryptor;
 
             if (current_encryptor) {
-                current_task->size = current_encryptor->encrypt(current_tun->encryptor_id, current_task->buffer, current_task->size);
+                current_task->size = current_encryptor->encrypt(current_tun->encryptor_instance, current_task->buffer, current_task->size);
             }
 
             while (current_endpoint_list) {
@@ -190,7 +190,7 @@ static void *thread_func(void *param) {
             switch (current_tun->tun_intf.proto) {
                 case PROTO_UDP:
                     if (current_encryptor) {
-                        current_task->size = current_encryptor->decrypt(current_tun->encryptor_id, current_task->buffer, current_task->size);
+                        current_task->size = current_encryptor->decrypt(current_tun->encryptor_instance, current_task->buffer, current_task->size);
                     }
 
                     recv_udp(current_tun->tun_intf.tun_fd, current_task->buffer, current_task->size);
@@ -198,7 +198,7 @@ static void *thread_func(void *param) {
                     break;
                 case PROTO_ICMP:
                     if (current_encryptor) {
-                        current_task->size = current_encryptor->decrypt(current_tun->encryptor_id, current_task->buffer + sizeof(struct ip) + sizeof(struct icmp),
+                        current_task->size = current_encryptor->decrypt(current_tun->encryptor_instance, current_task->buffer + sizeof(struct ip) + sizeof(struct icmp),
                             current_task->size - (sizeof(struct ip) + sizeof(struct icmp)));
                         current_task->size += sizeof(struct ip) + sizeof(struct icmp);
                     }
