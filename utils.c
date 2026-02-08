@@ -159,6 +159,6 @@ int tun_cache_cmp_func(void* arg1, void* arg2) {
     tun_cache_t* tun_cache2 = (tun_cache_t*)arg2;
 
     return (tun_cache1->ip.value == tun_cache2->ip.value &&
-        tun_cache1->mac.value == tun_cache2->mac.value &&
+        !memcmp(tun_cache1->mac.addr, tun_cache2->mac.addr, MAC_ADDR_LENGTH) &&
         !memcmp(tun_cache1->ip6.addr, tun_cache2->ip6.addr, IPV6_ADDR_LENGTH)) ? 0 : 1;
 }

@@ -476,7 +476,7 @@ static int search_cache(worker_t* worker, const char* buf, uint16_t size, tunnel
         case MODE_TAP:
             cur_tun_cache.ip.value = 0;
             memset(cur_tun_cache.ip6.addr, 0, IPV6_ADDR_LENGTH);
-            memcpy(&cur_tun_cache.mac.value, endpoint ? eth->h_dest : eth->h_source, MAC_ADDR_LENGTH);
+            memcpy(cur_tun_cache.mac.addr, endpoint ? eth->h_dest : eth->h_source, MAC_ADDR_LENGTH);
             break;
         default:
             PrintInform("The current tun %s has mode which doesn't support caching of endpoints (search cache)", tun_intf->tun_name);
@@ -534,7 +534,7 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size, tunne
         case MODE_TAP:
             cur_tun_cache.ip.value = 0;
             memset(cur_tun_cache.ip6.addr, 0, IPV6_ADDR_LENGTH);
-            memcpy(&cur_tun_cache.mac.value, eth->h_source, MAC_ADDR_LENGTH);
+            memcpy(cur_tun_cache.mac.addr, eth->h_source, MAC_ADDR_LENGTH);
             break;
         default:
             PrintInform("The current tun %s has mode which doesn't support caching of endpoints (update cache)", tun_intf->tun_name);
