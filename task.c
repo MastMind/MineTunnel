@@ -66,9 +66,10 @@ void task_create_worker(worker_t* worker) {
 
 void task_get_new(worker_t* worker, task_t** task) {
     pthread_mutex_lock(&worker->mutex);
-
     *task = &worker->task_buf[worker->new_task_idx];
+}
 
+void task_release(worker_t* worker) {
     pthread_mutex_unlock(&worker->mutex);
 }
 

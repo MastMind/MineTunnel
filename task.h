@@ -50,6 +50,7 @@ typedef struct tun_cache_s {
 
 void task_create_worker(worker_t* worker);
 void task_get_new(worker_t* worker, task_t** task);
+void task_release(worker_t* worker);
 void task_add(worker_t* worker);
 void task_destroy_all_workers();
 

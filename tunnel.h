@@ -15,18 +15,18 @@
 
 
 typedef struct opts_s {
-    char prog_name[PROG_NAME_LENGTH];
+    char prog_name[PROG_NAME_LENGTH + 1];
     uint8_t daemonize;
     uint8_t verbose;
-    char pidfile_path[PATH_MAX];
-    char config_path[PATH_MAX];
+    char pidfile_path[PATH_MAX + 1];
+    char config_path[PATH_MAX + 1];
 } options_t;
 
 typedef struct tun_intf_s {
     int raw_socket_in;
     int raw_socket_out;
     int tun_fd;
-    char tun_name[IFNAMSIZ + 1];
+    char tun_name[MAX_DEV_NAME_LENGTH];
     tun_proto_t proto;
     tun_mode_t mode;
 } tun_intf_t;
@@ -48,8 +48,8 @@ typedef struct tunnel_entity_s {
     hash_table_t* remote_endpoint_ht;
     bh_list_t* remote_endpoint_list;
     tun_intf_t tun_intf;
-    char bringup_script[PATH_MAX];
-    char shutdown_script[PATH_MAX];
+    char bringup_script[PATH_MAX + 1];
+    char shutdown_script[PATH_MAX + 1];
     enc_entinty_t* encryptor;
     void* encryptor_instance;
     worker_t* worker;

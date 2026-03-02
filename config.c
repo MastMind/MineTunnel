@@ -166,7 +166,7 @@ err:
 }
 
 static int str_to_proto(const char* str, tun_proto_t* proto) {
-    char str_proto[MAX_PROTO_LENGTH];
+    char str_proto[MAX_PROTO_LENGTH + 1];
 
     if (!str || *str == '\0') {
         return -1;
@@ -202,7 +202,7 @@ static int str_to_proto(const char* str, tun_proto_t* proto) {
 }
 
 static int str_to_tunmode(const char* str, tun_mode_t* mode) {
-    char str_tunmode[MAX_TUNMODE_LENGTH];
+    char str_tunmode[MAX_TUNMODE_LENGTH + 1];
 
     if (!str || *str == '\0') {
         return -1;

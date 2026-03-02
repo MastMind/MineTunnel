@@ -41,6 +41,8 @@ static uint32_t evlist_count = 0;
 static int tun_idx = 0;
 static int tap_idx = 0;
 
+static char localbuf[SOCKET_SIZE] = { 0 };
+
 static void RegSignals();
 static void SigHandler(int signo);
 static void PrintHelp(char* app_name);
@@ -493,7 +495,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
     switch (tun_info->proto) {
         case PROTO_UDP:
             // Init SOCK_RAW for output UDP packets:
-            intf->raw_socket_out = socket(AF_INET, SOCK_RAW, IPPROTO_UDP);
+            intf->raw_socket_out = socket(AF_INET, SOCK_RAW | SOCK_NONBLOCK, IPPROTO_UDP);
             if (intf->raw_socket_out < 0) {
                 intf->raw_socket_out = 0;
                 PrintError("Can't create UDP output raw socket\n");
@@ -502,7 +504,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
             }
 
             // Init SOCK_DGRAM for input UDP packets (because we want to handle only specific input port packets):
-            intf->raw_socket_in = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            intf->raw_socket_in = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
             if (intf->raw_socket_in < 0) {
                 intf->raw_socket_in = 0;
                 PrintError("Can't create UDP input raw socket\n");
@@ -530,7 +532,6 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
                 goto err_label;
             }
 
-
             memset(&serveraddr, 0, sizeof(serveraddr));
             serveraddr.sin_family = AF_INET;
             serveraddr.sin_addr.s_addr = htonl(INADDR_NONE); // Ignore all input packets, because this is out socket
@@ -556,7 +557,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
             break;
         case PROTO_ICMP:
             // Init SOCK_RAW for output UDP packets:
-            intf->raw_socket_out = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+            intf->raw_socket_out = socket(AF_INET, SOCK_RAW | SOCK_NONBLOCK, IPPROTO_ICMP);
             if (intf->raw_socket_out < 0) {
                 intf->raw_socket_out = 0;
                 PrintError("Can't create ICMP output raw socket\n");
@@ -565,7 +566,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
             }
 
             // Init SOCK_DGRAM for input ICMP packets (because we want to handle only specific input port packets):
-            intf->raw_socket_in = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+            intf->raw_socket_in = socket(AF_INET, SOCK_RAW | SOCK_NONBLOCK, IPPROTO_ICMP);
             if (intf->raw_socket_in < 0) {
                 intf->raw_socket_in = 0;
                 PrintError("Can't create ICMP input raw socket\n");
@@ -628,7 +629,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
             break;
     }
 
-    fd = open("/dev/net/tun", O_RDWR);
+    fd = open("/dev/net/tun", O_RDWR | SOCK_NONBLOCK);
 
     if (fd < 0) {
         PrintError("Can't open /dev/net/tun device for creating virtual interface\n");
@@ -663,7 +664,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
 
     ifr.ifr_flags |= IFF_NO_PI;
 
-    strncpy(ifr.ifr_name, intf->tun_name, IFNAMSIZ);
+    strcpy(ifr.ifr_name, intf->tun_name);
 
     if ((err = ioctl(fd, TUNSETIFF, (void *)&ifr)) < 0) {
         PrintError("ioctl TUNSETIFF error for interface %s\n", intf->tun_name);
@@ -823,30 +824,38 @@ static int tunnel_poll() {
                     ssize_t bytes = 0;
                     int remote_endpoint_flag = 0;
 
-                    task_get_new(current_tun->worker, &new_task);  //get new task identity and fill it below
                     if (found_tun_map->fd == current_tun->tun_intf.raw_socket_in) { //read from underlay network
                         switch (current_tun->tun_intf.proto) {
                             case PROTO_UDP:
-                                bytes = recvfrom(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer), 0,
+                                bytes = recvfrom(found_tun_map->fd,
+                                    localbuf, SOCKET_SIZE,
+                                    MSG_DONTWAIT,
                                     (struct sockaddr *)&remote_addr, &remote_len);
                                 remote_endpoint_flag = 1;
                                 break;
                             case PROTO_ICMP:
-                                bytes = read(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer));
+                                bytes = read(found_tun_map->fd,
+                                    localbuf,
+                                    SOCKET_SIZE);
                                 break;
                             default:
                                 PrintError("Can't receive packet. Unknown tunnel proto.\n");
                                 break;
                         }
                     } else {
-                        bytes = read(found_tun_map->fd, new_task->buffer, sizeof(new_task->buffer));
+                        bytes = read(found_tun_map->fd,
+                                    localbuf,
+                                    SOCKET_SIZE);
                     }
 
                     if (bytes <= 0) {
                         PrintError("Something went wrong in the receiving packets\n");
+                        task_release(current_tun->worker);
                         continue;
                     }
 
+                    task_get_new(current_tun->worker, &new_task);
+                    memcpy(new_task->buffer, localbuf, bytes);
                     new_task->tun_map = found_tun_map;
                     new_task->size = bytes;
                     new_task->endpoint_flag = remote_endpoint_flag;
@@ -859,7 +868,7 @@ static int tunnel_poll() {
                         new_task->endpoint.remote_endpoint.value = remote_addr.sin_addr.s_addr;
                         new_task->endpoint.remote_port = ntohs(remote_addr.sin_port);
                     }
-
+                    task_release(current_tun->worker);
                     task_add(current_tun->worker);
                 }
             }
