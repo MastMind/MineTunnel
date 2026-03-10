@@ -151,7 +151,9 @@ static void *thread_func(void *param) {
 
         if (fd == current_tun->tun_intf.tun_fd) { //this is accepted from tunnel socket (encapsulating)
             //prepare packet for sending via raw_socket_out for each endpoint
-            pthread_mutex_lock(&worker->dyn_endpoints_mutex);
+            if (worker->dyn_endpoints_enabled) {
+                pthread_mutex_lock(&worker->dyn_endpoints_mutex);
+            }
             bh_list_t* current_endpoint_list = current_tun->remote_endpoint_list;
             tunnel_endpoint_t* current_endpoint = current_endpoint_list ?
                                                     (tunnel_endpoint_t*)current_endpoint_list->data :
@@ -203,7 +205,9 @@ static void *thread_func(void *param) {
                 }
             }
 
-            pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+            if (worker->dyn_endpoints_enabled) {
+                pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+            }
         }
 
         if (fd == current_tun->tun_intf.raw_socket_in) { //this is accept from underlay network (decapsulating)
@@ -372,6 +376,7 @@ static void *dyn_endpoints_thread_func(void *param) {
             if (diff_time >= cur_remote_endpoint->ttl) {
                 //delete this record
                 bh_list_t* tmp_next = cur_remote_endpoint_list->next;
+
                 if (cur_remote_endpoint_list == tun->remote_endpoint_list) {
                     tun->remote_endpoint_list = tmp_next;
                 }
@@ -650,6 +655,10 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size, tunne
         return;
     }
     //search list in tun list endpoint
+    if (worker->dyn_endpoints_enabled) {
+        pthread_mutex_lock(&worker->dyn_endpoints_mutex);
+    }
+
     bhlist_push_front(&cur_endpoint_list, cur_endpoint);
     found_endpoint_list = hash_table_find(&tun->remote_endpoint_ht, cur_endpoint_list, &endpoint_hash_func, &endpoint_cmp_func);
 
@@ -662,6 +671,9 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size, tunne
                                                                         cur_endpoint->remote_port);
         //remove whole cur_endpoint_list
         bhlist_clear(cur_endpoint_list, NULL);
+        if (worker->dyn_endpoints_enabled) {
+            pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+        }
         return;
     }
 
@@ -671,6 +683,10 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size, tunne
     //add to cache
     cur_tun_cache.endpoint_list = found_endpoint_list;
     cur_tun_cache.ttl = MAX_CACHE_TTL;
+
+    if (worker->dyn_endpoints_enabled) {
+        pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+    }
 
     tun_cache = (tun_cache_t*)malloc(sizeof(tun_cache_t));
     if (!tun_cache) {
