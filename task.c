@@ -195,6 +195,10 @@ static void *thread_func(void *param) {
                         break;
                 }
 
+                if (current_endpoint->is_dynamic) {
+                    current_endpoint->ttl = MAX_DYNAMIC_ENDPOINT_TTL;
+                }
+
                 if (cache_flag) {
                     break;
                 }
