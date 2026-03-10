@@ -26,6 +26,7 @@ static uint16_t size = 0;
 
 static void *thread_func(void *param);
 static void *tun_cache_thread_func(void *param);
+static void *dyn_endpoints_thread_func(void *param);
 static ssize_t prepare_udp(char* sendbuf, char* packet_buf, uint16_t packet_size, ipv4_addr local_endpoint, uint16_t local_port, ipv4_addr remote_endpoint, uint16_t remote_port);
 static ssize_t send_udp(int raw_socket, char *sendbuf, uint16_t size);
 static ssize_t recv_udp(int tun_socket, char* recvbuf, uint16_t size);
@@ -34,12 +35,25 @@ static ssize_t send_icmp(int raw_socket, char* sendbuf, uint16_t size);
 static ssize_t recv_icmp(int tun_socket, char* recvbuf, uint16_t size, ipv4_addr local_endpoint, uint16_t local_port);
 static int search_cache(worker_t* worker, const char* buf, uint16_t size, tunnel_entity_t* tun, tunnel_endpoint_t** endpoint);
 static void update_cache(worker_t* worker, const char* buf, uint16_t size, tunnel_entity_t* tun, tunnel_endpoint_t* cur_endpoint);
+static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t size, tunnel_entity_t* tun, tunnel_endpoint_t* cur_endpoint);
+static void free_remote_endpoint_from_ht(void* data);
 static unsigned short checksum(void *b, int len);
 
 
-void task_create_worker(worker_t* worker) {
+void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     if (!worker) {
         return;
+    }
+
+    // if (worker->dyn_endpoints_enabled) {
+    worker->current_tun = NULL;
+    if (tun->dynamic_endpoints) { //means this worker should work with dynamic remote points
+        //dyn_endpoints_enabled initialization
+        worker->dyn_endpoints_enabled = 1;
+        worker->current_tun = tun;
+        pthread_mutex_init(&worker->dyn_endpoints_mutex, NULL);
+        pthread_attr_init(&worker->dyn_endpoints_attr);
+        pthread_create(&worker->dyn_endpoints_thr, &worker->dyn_endpoints_attr, dyn_endpoints_thread_func, worker);
     }
 
     worker->tun_cache_ht = NULL;
@@ -69,13 +83,7 @@ void task_get_new(worker_t* worker, task_t** task) {
     *task = &worker->task_buf[worker->new_task_idx];
 }
 
-void task_release(worker_t* worker) {
-    pthread_mutex_unlock(&worker->mutex);
-}
-
 void task_add(worker_t* worker) {
-    pthread_mutex_lock(&worker->mutex);
-
     if (worker->new_task_idx == MAX_TASKS - 1) {
         worker->new_task_idx = 0;
     } else {
@@ -103,6 +111,13 @@ void task_destroy_all_workers() {
 
         hash_table_clear(&workers[i]->tun_cache_ht, free);
         bhdeque_clear(workers[i]->tun_cache_list, NULL);
+
+        if (workers[i]->dyn_endpoints_enabled) {
+            //handle dynamic endpoint deinitialization
+            pthread_cancel(workers[i]->dyn_endpoints_thr);
+            pthread_attr_destroy(&workers[i]->dyn_endpoints_attr);
+            pthread_mutex_destroy(&workers[i]->dyn_endpoints_mutex);
+        }
 
         free(workers[i]);
     }
@@ -136,22 +151,27 @@ static void *thread_func(void *param) {
 
         if (fd == current_tun->tun_intf.tun_fd) { //this is accepted from tunnel socket (encapsulating)
             //prepare packet for sending via raw_socket_out for each endpoint
+            pthread_mutex_lock(&worker->dyn_endpoints_mutex);
             bh_list_t* current_endpoint_list = current_tun->remote_endpoint_list;
-            tunnel_endpoint_t* current_endpoint = (tunnel_endpoint_t*)current_endpoint_list->data;
+            tunnel_endpoint_t* current_endpoint = current_endpoint_list ?
+                                                    (tunnel_endpoint_t*)current_endpoint_list->data :
+                                                    NULL;
             char send_buf[SOCKET_SIZE];
             uint16_t send_size = 0;
 
             //check cache by task buffer (search by dst ip or dst mac)
             int cache_flag = search_cache(worker, current_task->buffer, current_task->size, current_tun, &current_endpoint);
 #ifdef DEBUG
+            if (current_endpoint) {
             fprintf(stdout, "search_cache %u current_endpoint->addr %u.%u.%u.%u:%u\n", cache_flag,
                                                                                 current_endpoint->remote_endpoint.addr[0],
                                                                                 current_endpoint->remote_endpoint.addr[1],
                                                                                 current_endpoint->remote_endpoint.addr[2],
                                                                                 current_endpoint->remote_endpoint.addr[3],
                                                                                 current_endpoint->remote_port);
+        }
 #endif
-            //encrypt packetbuf if it possible
+            //encrypt packetbuf if it is possible
             enc_entinty_t* current_encryptor = current_tun->encryptor;
 
             if (current_encryptor) {
@@ -182,16 +202,25 @@ static void *thread_func(void *param) {
                     current_endpoint = (tunnel_endpoint_t*)current_endpoint_list->data;
                 }
             }
+
+            pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
         }
 
         if (fd == current_tun->tun_intf.raw_socket_in) { //this is accept from underlay network (decapsulating)
-            //decrypt packetbuf if it possible
+            //decrypt packetbuf if it is possible
             enc_entinty_t* current_encryptor = current_tun->encryptor;
 
             switch (current_tun->tun_intf.proto) {
                 case PROTO_UDP:
                     if (current_encryptor) {
                         current_task->size = current_encryptor->decrypt(current_tun->encryptor_instance, current_task->buffer, current_task->size);
+                    }
+
+                    //dynamic remote endpoints
+                    if (current_tun->dynamic_endpoints) {
+                        update_remote_endpoints(worker,
+                            current_task->buffer, current_task->size,
+                            current_tun, &current_task->endpoint);
                     }
 
                     recv_udp(current_tun->tun_intf.tun_fd, current_task->buffer, current_task->size);
@@ -204,7 +233,6 @@ static void *thread_func(void *param) {
                         current_task->size += sizeof(struct ip) + sizeof(struct icmp);
                     }
 
-                    recv_icmp(current_tun->tun_intf.tun_fd, current_task->buffer, current_task->size, current_tun->local_endpoint, current_tun->icmp_identifier);
                     //getting endpoint from iph and icmphdr
                     struct ip* iphdr = (struct ip*)current_task->buffer;
                     struct icmp* icmphdr = (struct icmp *)(current_task->buffer + sizeof(struct ip));
@@ -213,6 +241,14 @@ static void *thread_func(void *param) {
                     current_task->endpoint.remote_endpoint.value = iphdr->ip_src.s_addr;
                     current_task->endpoint.remote_port = icmphdr->icmp_id; //id is equal to port in ICMP mode
 
+                    //dynamic remote endpoints
+                    if (current_tun->dynamic_endpoints) {
+                        update_remote_endpoints(worker,
+                            current_task->buffer, current_task->size,
+                            current_tun, &current_task->endpoint);
+                    }
+
+                    recv_icmp(current_tun->tun_intf.tun_fd, current_task->buffer, current_task->size, current_tun->local_endpoint, current_tun->icmp_identifier);
                     update_cache(worker, current_task->buffer + sizeof(struct ip) + sizeof(struct icmp), current_task->size - (sizeof(struct ip) + sizeof(struct icmp)),
                         current_tun, &current_task->endpoint);
                     break;
@@ -302,6 +338,68 @@ static void *tun_cache_thread_func(void *param) {
         }
 
         pthread_mutex_unlock(&worker->tun_cache_mutex);
+    }
+
+    pthread_exit(0);
+}
+
+static void *dyn_endpoints_thread_func(void *param) {
+    worker_t* worker = (worker_t*)param;
+    tunnel_entity_t* tun = worker->current_tun;
+
+    while (1) {
+        time_t cur_timestamp = time(NULL);
+        sleep(1);
+
+        pthread_mutex_lock(&worker->dyn_endpoints_mutex);
+        bh_list_t* cur_remote_endpoint_list = tun->remote_endpoint_list;
+        bh_list_t* prev_remote_endpoint_list = NULL;
+
+        while (cur_remote_endpoint_list) {
+            tunnel_endpoint_t* cur_remote_endpoint = (tunnel_endpoint_t*)cur_remote_endpoint_list->data;
+
+            if (!cur_remote_endpoint->is_dynamic) {
+                prev_remote_endpoint_list = cur_remote_endpoint_list;
+                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
+                continue;
+            }
+
+            time_t diff_time = time(NULL) - cur_timestamp;
+            if (diff_time < 0) { //time overflow case
+                diff_time = 1;
+            }
+
+            if (diff_time >= cur_remote_endpoint->ttl) {
+                //delete this record
+                bh_list_t* tmp_next = cur_remote_endpoint_list->next;
+                if (cur_remote_endpoint_list == tun->remote_endpoint_list) {
+                    tun->remote_endpoint_list = tmp_next;
+                }
+
+                if (prev_remote_endpoint_list) {
+                    prev_remote_endpoint_list->next = tmp_next;
+                }
+
+                PrintInform("Delete dynamic endpoint %u.%u.%u.%u:%u\n",
+                        cur_remote_endpoint->remote_endpoint.addr[0],
+                        cur_remote_endpoint->remote_endpoint.addr[1],
+                        cur_remote_endpoint->remote_endpoint.addr[2],
+                        cur_remote_endpoint->remote_endpoint.addr[3],
+                        cur_remote_endpoint->remote_port);
+
+                hash_table_del_element(&tun->remote_endpoint_ht, cur_remote_endpoint_list, &endpoint_hash_func,
+                    &endpoint_cmp_func, &free_remote_endpoint_from_ht);
+                cur_remote_endpoint_list = tmp_next;
+                continue;
+            } else {
+                cur_remote_endpoint->ttl -= diff_time;
+            }
+
+            prev_remote_endpoint_list = cur_remote_endpoint_list;
+            cur_remote_endpoint_list = cur_remote_endpoint_list->next;
+        }
+
+        pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
     }
 
     pthread_exit(0);
@@ -597,6 +695,80 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size, tunne
 #endif
 
     pthread_mutex_unlock(&worker->tun_cache_mutex);
+}
+
+static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t size, tunnel_entity_t* tun, tunnel_endpoint_t* cur_endpoint) {
+#ifdef DEBUG
+    PrintInform("received datagram for not registered endpoint %u.%u.%u.%u:%u\n",
+        cur_endpoint->remote_endpoint.addr[0],
+        cur_endpoint->remote_endpoint.addr[1],
+        cur_endpoint->remote_endpoint.addr[2],
+        cur_endpoint->remote_endpoint.addr[3],
+        cur_endpoint->remote_port);
+#endif
+    pthread_mutex_lock(&worker->dyn_endpoints_mutex);
+    //search endpoint
+    bh_list_t* cur_endpoint_list = NULL;
+
+    bhlist_push_front(&cur_endpoint_list, cur_endpoint);
+    bh_list_t* found_endpoint_list = hash_table_find(&tun->remote_endpoint_ht, cur_endpoint_list, &endpoint_hash_func, &endpoint_cmp_func);
+    //if endpoint found and dynamic - update ttl
+    if (found_endpoint_list) {
+        tunnel_endpoint_t* found_endpoint = (tunnel_endpoint_t*)found_endpoint_list->data;
+        if (found_endpoint->is_dynamic) {
+#ifdef DEBUG
+        PrintInform("received datagram updated ttl for endpoint %u.%u.%u.%u:%u\n",
+            found_endpoint->remote_endpoint.addr[0],
+            found_endpoint->remote_endpoint.addr[1],
+            found_endpoint->remote_endpoint.addr[2],
+            found_endpoint->remote_endpoint.addr[3],
+            found_endpoint->remote_port);
+#endif
+            found_endpoint->ttl = MAX_DYNAMIC_ENDPOINT_TTL;
+        } else {
+            pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+            return;
+        }
+    } else {
+    //otherwise create new dynamic endpoint
+        tunnel_endpoint_t* new_endpoint = (tunnel_endpoint_t*)malloc(sizeof(tunnel_endpoint_t));
+
+        if (!new_endpoint) {
+            PrintError("Internal error: can't alloc memory for new endpoint %u.%u.%u.%u:%u\n",
+                cur_endpoint->remote_endpoint.addr[0],
+                cur_endpoint->remote_endpoint.addr[1],
+                cur_endpoint->remote_endpoint.addr[2],
+                cur_endpoint->remote_endpoint.addr[3],
+                cur_endpoint->remote_port);
+            pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+            return;
+        }
+
+        memcpy(new_endpoint, cur_endpoint, sizeof(tunnel_endpoint_t));
+        new_endpoint->is_dynamic = 1;
+        new_endpoint->ttl = MAX_DYNAMIC_ENDPOINT_TTL;
+
+        bhlist_push_front(&tun->remote_endpoint_list, new_endpoint);
+        hash_table_add(&tun->remote_endpoint_ht, tun->remote_endpoint_list, &endpoint_hash_func);
+        PrintInform("Registered new dynamic endpoint %u.%u.%u.%u:%u\n",
+                    cur_endpoint->remote_endpoint.addr[0],
+                    cur_endpoint->remote_endpoint.addr[1],
+                    cur_endpoint->remote_endpoint.addr[2],
+                    cur_endpoint->remote_endpoint.addr[3],
+                    cur_endpoint->remote_port);
+    }
+
+    pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
+}
+
+static void free_remote_endpoint_from_ht(void* data) {
+    bh_list_t* element = (bh_list_t*)data;
+
+    if (element->data) {
+        free(element->data);
+    }
+
+    free(element);
 }
 
 static unsigned short checksum(void *buf, int len) {

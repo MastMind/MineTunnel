@@ -47,6 +47,7 @@ typedef struct tunnel_entity_s {
     uint16_t icmp_identifier;
     hash_table_t* remote_endpoint_ht;
     bh_list_t* remote_endpoint_list;
+    int dynamic_endpoints;
     tun_intf_t tun_intf;
     char bringup_script[PATH_MAX + 1];
     char shutdown_script[PATH_MAX + 1];

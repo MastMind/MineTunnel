@@ -313,6 +313,10 @@ static int build_tunnels(config_t* cfg) {
             new_endpoint->remote_port = tun_info->icmp_id;
         }
 
+        if (new_endpoint->remote_endpoint.value == 0) {
+            tun.dynamic_endpoints = 1;
+        }
+
         memset(&tun.tun_intf, 0, sizeof(tun_intf_t));
 
         strncpy(tun.tun_intf.tun_name, tun_info->dev_name, MAX_DEV_NAME_LENGTH);
@@ -367,8 +371,12 @@ static int build_tunnels(config_t* cfg) {
                 return -2;
             }
 
-            bhlist_push_front(&found_tun->remote_endpoint_list, new_endpoint);
-            hash_table_add(&found_tun->remote_endpoint_ht, found_tun->remote_endpoint_list, &endpoint_hash_func);
+            if (new_endpoint->remote_endpoint.value == 0) {
+                found_tun->dynamic_endpoints = 1;
+            } else {
+                bhlist_push_front(&found_tun->remote_endpoint_list, new_endpoint);
+                hash_table_add(&found_tun->remote_endpoint_ht, found_tun->remote_endpoint_list, &endpoint_hash_func);
+            }
         } else {
             tunnel_entity_t* new_tun = (tunnel_entity_t*)malloc(sizeof(tunnel_entity_t));
 
@@ -380,8 +388,10 @@ static int build_tunnels(config_t* cfg) {
 
             memcpy(new_tun, &tun, sizeof(tunnel_entity_t));
 
-            bhlist_push_front(&new_tun->remote_endpoint_list, new_endpoint);
-            hash_table_add(&new_tun->remote_endpoint_ht, new_tun->remote_endpoint_list, &endpoint_hash_func);
+            if (new_endpoint->remote_endpoint.value) {
+                bhlist_push_front(&new_tun->remote_endpoint_list, new_endpoint);
+                hash_table_add(&new_tun->remote_endpoint_ht, new_tun->remote_endpoint_list, &endpoint_hash_func);
+            }
 
             //start tunnel in system here
             if (init_tun_intf(new_tun, tun_info)) {
@@ -737,7 +747,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
         goto err_label;
     }
 
-    task_create_worker(tun->worker);
+    task_create_worker(tun->worker, tun);
 
     return 0;
 
@@ -850,7 +860,6 @@ static int tunnel_poll() {
 
                     if (bytes <= 0) {
                         PrintError("Something went wrong in the receiving packets\n");
-                        task_release(current_tun->worker);
                         continue;
                     }
 
@@ -868,7 +877,7 @@ static int tunnel_poll() {
                         new_task->endpoint.remote_endpoint.value = remote_addr.sin_addr.s_addr;
                         new_task->endpoint.remote_port = ntohs(remote_addr.sin_port);
                     }
-                    task_release(current_tun->worker);
+
                     task_add(current_tun->worker);
                 }
             }

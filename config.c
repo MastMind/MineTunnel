@@ -318,7 +318,7 @@ static int tunnels_parsing(json_array_t json_tunnnels, config_t* cfg) {
         //getting remote endpoint
         char* tunnel_local = (char*)((json_object_get_element(json_tunnel, "local"))->value);
 
-        if (!tunnel_remote) {
+        if (!tunnel_local) {
             PrintError("Syntax error in json config tunnels section. Bad tunnel json's object. Key \"local\" not found\n");
             ret = -6;
             goto err;

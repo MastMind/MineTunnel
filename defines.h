@@ -55,6 +55,8 @@ typedef union {
 typedef struct tunnel_endpoint_s {
     ipv4_addr remote_endpoint;
     uint16_t remote_port;
+    int is_dynamic;
+    uint16_t ttl;
 } tunnel_endpoint_t;
 
 typedef enum tun_proto_e {

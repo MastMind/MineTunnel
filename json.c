@@ -895,7 +895,7 @@ static int parse_line(json_value_t v, const char* buf) {
 
                         if (array_or_object_flag) {
                             //skip comma and spaces
-                            line += strspn(line, " \n\t");
+                            line += strspn(line, " \n\t\r");
                             array_or_object_flag = 0;
                             break;
                         }
@@ -1002,7 +1002,8 @@ static int parse_line(json_value_t v, const char* buf) {
                     case ' ':
                     case '\n':
                     case '\t':
-                        line += strspn(line, " \n\t");
+                    case '\r':
+                        line += strspn(line, " \n\t\r");
                         if (fragment) {
                             if (*line != ',' &&
                                 *line != ']') {
@@ -1105,7 +1106,7 @@ static int parse_line(json_value_t v, const char* buf) {
                         if (!key) {
                             if (array_or_object_flag) {
                                 //skip comma and spaces
-                                line += strspn(line, " \n\t");
+                                line += strspn(line, " \n\t\r");
                                 array_or_object_flag = 0;
                                 break;
                             }
@@ -1231,7 +1232,8 @@ static int parse_line(json_value_t v, const char* buf) {
                     case ' ':
                     case '\n':
                     case '\t':
-                        line += strspn(line, " \n\t");
+                    case '\r':
+                        line += strspn(line, " \n\t\r");
                         if (fragment) {
                             if (*line != ',' &&
                                 *line != ':' &&
