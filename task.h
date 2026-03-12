@@ -10,8 +10,8 @@
 
 
 #define MAX_TASKS 1024
-#define MAX_CACHE_TTL 60
-#define MAX_DYNAMIC_ENDPOINT_TTL 120 //IMPORTANT: should be greater than MAX_CACHE_TTL
+#define MAX_CACHE_TTL 600
+#define MAX_DYNAMIC_ENDPOINT_TTL 900 //IMPORTANT: should be greater than MAX_CACHE_TTL
 
 
 
