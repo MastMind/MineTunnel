@@ -778,6 +778,13 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
                     cur_endpoint->remote_endpoint.addr[2],
                     cur_endpoint->remote_endpoint.addr[3],
                     cur_endpoint->remote_port);
+
+        pthread_mutex_lock(&worker->tun_cache_mutex);
+        hash_table_clear(&worker->tun_cache_ht, free);
+        bhdeque_clear(worker->tun_cache_list, NULL);
+        worker->tun_cache_ht = NULL;
+        worker->tun_cache_list = NULL;
+        pthread_mutex_unlock(&worker->tun_cache_mutex);
     }
 
     pthread_mutex_unlock(&worker->dyn_endpoints_mutex);
