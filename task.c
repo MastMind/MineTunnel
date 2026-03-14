@@ -733,6 +733,8 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
     bhlist_push_front(&cur_endpoint_list, cur_endpoint);
     bh_list_t* found_endpoint_list = hash_table_find(&tun->remote_endpoint_ht, cur_endpoint_list, &endpoint_hash_func, &endpoint_cmp_func);
     //if endpoint found and dynamic - update ttl
+    bhlist_clear(cur_endpoint_list, NULL);
+
     if (found_endpoint_list) {
         tunnel_endpoint_t* found_endpoint = (tunnel_endpoint_t*)found_endpoint_list->data;
         if (found_endpoint->is_dynamic) {
