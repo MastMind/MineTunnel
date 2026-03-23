@@ -36,8 +36,8 @@ typedef struct tun_info_s {
 typedef struct config_s {
     tun_proto_t default_proto;
     uint16_t default_port;
-    char global_bringup_script[PATH_MAX + 1]; //helper script for setup which must be executed after starting ALL tunnels
-    char global_shutdown_script[PATH_MAX + 1]; //helper script for tear down which must be executed before removing ALL tunnels
+    char global_bringup_script[PATH_MAX]; //helper script for setup which must be executed after starting ALL tunnels
+    char global_shutdown_script[PATH_MAX]; //helper script for tear down which must be executed before removing ALL tunnels
     tun_info_t* tunnels;
     uint16_t tunnels_count;
     tun_encryptor_t* encryptors;

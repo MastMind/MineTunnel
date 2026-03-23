@@ -4,14 +4,23 @@
 
 #include <limits.h>
 #include <stdint.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <net/if.h>
+#endif
+#ifndef IFNAMSIZ
+#define IFNAMSIZ 16
+#endif
 
 
 
 
 #define PROG_NAME_LENGTH 256
+#ifndef _WIN32
 #define DEFAULT_PID_FILE "/var/run/minetunnel.pid"
 #define DEFAULT_CTL_PATH "/var/run/minetunnel_ctl"
+#endif
 #define DEFAULT_CONFIG_FILE "config.json"
 #define MAX_ENCRYPTOR_NAME 128
 #define MAX_DEV_NAME_LENGTH IFNAMSIZ+1
@@ -21,8 +30,13 @@
 #define IPV6_ADDR_LENGTH 16
 #define MAC_ADDR_LENGTH 6
 #define PORT_LENGTH 2
+#ifdef _WIN32
+#define MAX_TUNNELS 64
+#define POLLING_TIMEOUT 1000
+#else
 #define MAX_TUNNELS 256
 #define EPOLL_TIMEOUT 5000
+#endif
 
 #define MAX_JSON_STR_LENGTH 8192
 #define MAX_STR_LENGTH 8192
@@ -33,6 +47,7 @@
 #define DEFAULT_ICMP_ID 1234
 
 #define APP_NAME "MineTunnel"
+#define VERSION_STR "1.0.0"
 #define DEFAULT_MINE_TUN_NAME "mine_tun%d"
 #define DEFAULT_MINE_TAP_NAME "mine_tap%d"
 
@@ -55,8 +70,8 @@ typedef union {
 typedef struct tunnel_endpoint_s {
     ipv4_addr remote_endpoint;
     uint16_t remote_port;
-    int is_dynamic;
-    uint16_t ttl;
+    int      is_dynamic;
+    int      ttl;
 } tunnel_endpoint_t;
 
 typedef enum tun_proto_e {

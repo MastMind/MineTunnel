@@ -3,7 +3,12 @@
 
 
 #include <stdint.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <devguid.h>
+#else
 #include <net/if.h>
+#endif
 #include <limits.h>
 
 #include "task.h"
@@ -15,18 +20,28 @@
 
 
 typedef struct opts_s {
-    char prog_name[PROG_NAME_LENGTH + 1];
+    char prog_name[PROG_NAME_LENGTH];
     uint8_t daemonize;
     uint8_t verbose;
-    char pidfile_path[PATH_MAX + 1];
-    char config_path[PATH_MAX + 1];
+#ifndef _WIN32
+    char pidfile_path[PATH_MAX];
+#endif
+    char config_path[PATH_MAX];
 } options_t;
 
 typedef struct tun_intf_s {
+#ifdef _WIN32
+    SOCKET raw_socket_in;
+    SOCKET raw_socket_out;
+    HANDLE tun_fd;
+    GUID   guidAdapter;
+    void*  wintun_ctx;
+#else
     int raw_socket_in;
     int raw_socket_out;
     int tun_fd;
-    char tun_name[MAX_DEV_NAME_LENGTH];
+#endif
+    char tun_name[IFNAMSIZ + 1];
     tun_proto_t proto;
     tun_mode_t mode;
 } tun_intf_t;
@@ -49,8 +64,8 @@ typedef struct tunnel_entity_s {
     bh_list_t* remote_endpoint_list;
     int dynamic_endpoints;
     tun_intf_t tun_intf;
-    char bringup_script[PATH_MAX + 1];
-    char shutdown_script[PATH_MAX + 1];
+    char bringup_script[PATH_MAX];
+    char shutdown_script[PATH_MAX];
     enc_entinty_t* encryptor;
     void* encryptor_instance;
     worker_t* worker;
@@ -67,6 +82,11 @@ void tunnel_app_stop();
 
 int tunnel_app_getDaemonize();
 int tunnel_app_getVerbosity();
+
+#ifdef _WIN32
+void iocp_tap_write_async(HANDLE tun_fd, const char* buf, DWORD size);
+void tun_write_async(tun_intf_t* intf, const char* buf, DWORD size);
+#endif
 
 
 #endif

@@ -1,3 +1,4 @@
 minetunnel
 *.o
-
+build
+*.json

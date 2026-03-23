@@ -5,11 +5,19 @@ Supported protocols: udp, icmp.
 The main idea of this app it is the easy configuration and serverless solution (without special server like in the OpenVPN or other popular solutions).
 
 # Supported platforms
-Linux Debian based systems is recommended.
+Linux Debian based systems and Windows 7+.
 
 # Build and requirements
+
+## Linux
 Just run make in the folder with cloned project. The gcc 12 is recommended but the older versions should work as well.
 For running the application requires root privilegies (need for granting acces to /dev/net/tun)
+
+## Windows
+Run compile.bat with MinGW-w64. You'll find the compiled `.exe` in `build` directory. Also you need to install `wintun.dll` (it is located in `drivers` directory) by copying the `.dll` to the main `.exe` directory. For installing TAP0901 driver you need to use the command `pnputil -i -a tap0901.inf` in the specific to OS arch directory which located in the `drivers` directory (if OpenVPN is installed on the machine you don't need to install this driver because this is installed with OpenVPN). By the way you can compile Windows binaries via Linux'es mingw-w64-gcc with `make` (just replace `GCC` variable inside `Makefile` to the `x86_64-w64-mingw32-gcc`).
+
+**WINTUN** is an original driver from [this](https://github.com/WireGuard/wintun "WinTun") project.
+**TAP0901** is an original driver from [this](https://github.com/OpenVPN/tap-windows6/releases "tap0901 NDIS6 releases") project.
 
 # How to use it
 After building the binary you need to write a config file (the example config you can find in examples folder). The config file is a JSON file with the next structure:
@@ -43,7 +51,7 @@ After building the binary you need to write a config file (the example config yo
 
 Where `proto` in root node is tunnel's proto by default, `port` in root node is default port and `encryption_plugins` is array of encryptors (object with name field and path to the encryptor's so; name is unique for encryptor and using as an identificator). Available proto's values now: udp, icmp. The array `tunnels` describes all tunnels which have to be created in system. Descriptions of each parameter:
 
-- `remote` - ip address of the remote endpoint. Also available syntax in format "192.168.1.101:5555" where 5555 is port value. If port is not setted then the default port value will be used as a port. This value can be "0.0.0.0". If zeroes is setted it means this tunnel can handle dynamic remote endpoints: any received underlay datagram will register new temporary remote endpoint (ip addres and port grabbing from network headers of datagram). This option is required if you have to handle clients behind the NAT. Also dynamic remote endpoints don't cancel static endpoints which defined below or above.
+- `remote` - ip address of the remote endpoint. Also available syntax in format "192.168.1.101:5555" where 5555 is port value. If port is not setted then the default port value will be used as a port.
 - `local` - ip address of the local interface which have to be used as VTEP (do not recommend use 0.0.0.0 as listening of all interfaces; better to use specific local ip of available network interface). Also available syntax in format "192.168.1.101:5555" (like for remote parameter)
 - `proto` - define the protocol for tunneling. This is optional field. If the field is not used here the default tunnel's proto value will be used as the proto.
 - `mode` - set tun or tap type of interface for virtual network. Obviously available only 2 values: tun, tap. This parameter is necessary.
