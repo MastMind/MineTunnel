@@ -1,7 +1,7 @@
 CC=gcc
 #CFLAGS=-c -Wall -Werror -g -DDEBUG
 #LDFLAGS=-static
-CFLAGS=-s -c -Wall -Werror -static -O1
+CFLAGS=-s -c -Wall -Werror -static -O1 -Wno-unused-result
 LDFLAGS=-s -static
 SOURCES=*.c
 OBJECTS = $(patsubst %.c, %.o, $(wildcard *.c))
