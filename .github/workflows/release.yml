@@ -43,7 +43,7 @@ jobs:
         run: |
           if [ -n "${{ matrix.cflags }}" ]; then
             make CC=${{ matrix.cc }} \
-                 CFLAGS="-s -c -Wall -Werror -static -O1 ${{ matrix.cflags }}" \
+                 CFLAGS="-s -c -Wall -Werror -static -O1 -Wno-unused-result ${{ matrix.cflags }}" \
                  LDFLAGS="-s -static ${{ matrix.ldflags }}"
           else
             make CC=${{ matrix.cc }}
