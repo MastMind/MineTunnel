@@ -16,11 +16,7 @@
 #include "utils.h"
 
 
-#ifdef _WIN32
 #define MAX_TASKS 256
-#else
-#define MAX_TASKS 1024
-#endif
 #define MAX_CACHE_TTL 600
 #define MAX_DYNAMIC_ENDPOINT_TTL 900 //IMPORTANT: should be greater than MAX_CACHE_TTL
 

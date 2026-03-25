@@ -47,7 +47,7 @@
 #define DEFAULT_ICMP_ID 1234
 
 #define APP_NAME "MineTunnel"
-#define VERSION_STR "1.0.0"
+#define VERSION_STR "1.0.1"
 #define DEFAULT_MINE_TUN_NAME "mine_tun%d"
 #define DEFAULT_MINE_TAP_NAME "mine_tap%d"
 
