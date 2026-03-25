@@ -30,6 +30,41 @@ jobs:
             cc: aarch64-linux-gnu-gcc
             extra_packages: gcc-aarch64-linux-gnu
 
+          - arch: armv7
+            deb_arch: armhf
+            cc: arm-linux-gnueabihf-gcc
+            extra_packages: gcc-arm-linux-gnueabihf
+            cflags: ""
+            ldflags: ""
+
+          - arch: armv6
+            deb_arch: armel
+            cc: arm-linux-gnueabi-gcc
+            extra_packages: gcc-arm-linux-gnueabi
+            cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=softfp"
+            ldflags: ""
+
+          - arch: mips
+            deb_arch: mips
+            cc: mips-linux-gnu-gcc
+            extra_packages: "gcc-mips-linux-gnu libc6-dev-mips-cross"
+            cflags: ""
+            ldflags: ""
+
+          - arch: mipsel
+            deb_arch: mipsel
+            cc: mipsel-linux-gnu-gcc
+            extra_packages: gcc-mipsel-linux-gnu
+            cflags: ""
+            ldflags: ""
+
+          - arch: mips64
+            deb_arch: mips64el
+            cc: mips64el-linux-gnuabi64-gcc
+            extra_packages: gcc-mips64el-linux-gnuabi64
+            cflags: ""
+            ldflags: ""
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
