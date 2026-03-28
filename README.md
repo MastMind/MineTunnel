@@ -341,9 +341,9 @@ The `encryption_params` is a very specific value. It is necessary parameter if t
 If you find this project useful, you can support its development with a donation.
 Donations are completely optional, but if you’d like to support the project, they help keep development moving faster.
 
-*BTC:* 128Hf6S5H8TFRvCmMkPaCe91go87hGznvh
-*ETH:* 0xe28B5cce4be9B255378760e524Aa5A9fb6727504
-*ZEC:* t1WhPQpS2qada2YviykhzRRuA62qwi3PxuG
+**BTC:** 128Hf6S5H8TFRvCmMkPaCe91go87hGznvh  
+**ETH:** 0xe28B5cce4be9B255378760e524Aa5A9fb6727504  
+**ZEC:** t1WhPQpS2qada2YviykhzRRuA62qwi3PxuG  
 
 ## Other Ways to Support
 
