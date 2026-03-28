@@ -335,3 +335,19 @@ encryption_params : {
 }
 ```
 The `encryption_params` is a very specific value. It is necessary parameter if the parameter `encryption` is added. The value's format depends of the choosen `encryption` and the JSON's object in value will be parsed by encryption plugin. Here the xor plugin is using and it requires `key_length` and `key` parameters. See more detailed information about the loaded encryption plugin for the correct configuring.
+
+# Support the Project
+
+If you find this project useful, you can support its development with a donation.
+Donations are completely optional, but if you’d like to support the project, they help keep development moving faster.
+
+*BTC:* 128Hf6S5H8TFRvCmMkPaCe91go87hGznvh
+*ETH:* 0xe28B5cce4be9B255378760e524Aa5A9fb6727504
+*ZEC:* t1WhPQpS2qada2YviykhzRRuA62qwi3PxuG
+
+## Other Ways to Support
+
+- Star or fork this repository
+- Report bugs and suggest features
+
+Thank you for your support!
