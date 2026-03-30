@@ -16,7 +16,7 @@ For running the application requires root privilegies (need for granting acces t
 ## Windows
 Run compile.bat with MinGW-w64. You'll find the compiled `.exe` in `build` directory. Also you need to install `wintun.dll` (it is located in `drivers` directory) by copying the `.dll` to the main `.exe` directory. For installing TAP0901 driver you need to use the command `pnputil -i -a tap0901.inf` in the specific to OS arch directory which located in the `drivers` directory (if OpenVPN is installed on the machine you don't need to install this driver because this is installed with OpenVPN). By the way you can compile Windows binaries via Linux'es mingw-w64-gcc with `make` (just replace `GCC` variable inside `Makefile` to the `x86_64-w64-mingw32-gcc`).
 
-**WINTUN** is an original driver from [this](https://github.com/WireGuard/wintun "WinTun") project.
+**WINTUN** is an original driver from [this](https://github.com/WireGuard/wintun "WinTun") project.  
 **TAP0901** is an original driver from [this](https://github.com/OpenVPN/tap-windows6/releases "tap0901 NDIS6 releases") project.
 
 # How to use it
@@ -335,6 +335,15 @@ encryption_params : {
 }
 ```
 The `encryption_params` is a very specific value. It is necessary parameter if the parameter `encryption` is added. The value's format depends of the choosen `encryption` and the JSON's object in value will be parsed by encryption plugin. Here the xor plugin is using and it requires `key_length` and `key` parameters. See more detailed information about the loaded encryption plugin for the correct configuring.
+
+# Third-Party Components
+
+This project includes the following third-party drivers:
+
+- **Wintun** — provided by the WireGuard project: https://github.com/WireGuard/wintun  
+- **TAP-Windows (tap0901)** — provided by the OpenVPN project: https://github.com/OpenVPN/tap-windows6/releases  
+
+All rights belong to their respective authors. See the included license files for details.
 
 # Support the Project
 
