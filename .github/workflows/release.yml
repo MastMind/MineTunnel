@@ -1,5 +1,4 @@
 name: Build and Release
-
 on:
   push:
     tags:
@@ -7,13 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build'
+        description: 'Tag to build (e.g. 1.0.0)'
         required: false
+        default: '0.0.0-dev'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         include:
@@ -33,87 +32,80 @@ jobs:
           - arch: arm64
             deb_arch: arm64
             cc: aarch64-linux-musl-gcc
+            musl_toolchain: aarch64-linux-musl
 
           - arch: armv7
             deb_arch: armhf
             cc: arm-linux-musleabihf-gcc
+            musl_toolchain: arm-linux-musleabihf
+            cflags: "-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
 
           - arch: armv6
             deb_arch: armel
             cc: arm-linux-musleabi-gcc
+            musl_toolchain: arm-linux-musleabi
             cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=softfp"
 
           - arch: mips
             deb_arch: mips
             cc: mips-linux-musl-gcc
+            musl_toolchain: mips-linux-musl
 
           - arch: mipsel
             deb_arch: mipsel
             cc: mipsel-linux-musl-gcc
+            musl_toolchain: mipsel-linux-musl
 
           - arch: mips64
             deb_arch: mips64el
-            cc: mips64el-linux-musl-gcc
+            cc: mips64-linux-musl-gcc
+            musl_toolchain: mips64-linux-musl
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${{ github.event.inputs.tag || '0.0.0-dev' }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install base packages
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc ${{ matrix.extra_packages }}
 
-      - name: Install musl cross toolchains
+      - name: Install musl cross toolchain
+        if: matrix.musl_toolchain != ''
         run: |
           set -e
-
-          TOOLCHAINS=(
-            arm-linux-musleabihf
-            arm-linux-musleabi
-            aarch64-linux-musl
-            mips-linux-musl
-            mipsel-linux-musl
-            mips64el-linux-musl
-          )
-
-          for t in "${TOOLCHAINS[@]}"; do
-            echo "Downloading $t..."
-            wget -4 -q https://musl.cc/${t}-cross.tgz
-            tar -xzf ${t}-cross.tgz
-            echo "$PWD/${t}-cross/bin" >> $GITHUB_PATH
-          done
+          T=${{ matrix.musl_toolchain }}
+          echo "Downloading ${T}-cross.tgz from musl.cc..."
+          wget -4 -q --show-progress https://musl.cc/${T}-cross.tgz
+          tar -xzf ${T}-cross.tgz
+          echo "$PWD/${T}-cross/bin" >> $GITHUB_PATH
 
       - name: Build binary
         run: |
           echo "Using CC=${{ matrix.cc }}"
-
-          if [ -n "${{ matrix.cflags }}" ]; then
-            make CC=${{ matrix.cc }} \
-                 CFLAGS="-s -c -Wall -Werror -static -O1 -Wno-unused-result ${{ matrix.cflags }}" \
-                 LDFLAGS="-s -static ${{ matrix.ldflags }}"
-          else
-            make CC=${{ matrix.cc }} \
-                 CFLAGS="-s -c -Wall -Werror -static -O1 -Wno-unused-result" \
-                 LDFLAGS="-s -static"
-          fi
-
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          EXTRA_CFLAGS="${{ matrix.cflags }}"
+          EXTRA_LDFLAGS="${{ matrix.ldflags }}"
+          make CC=${{ matrix.cc }} \
+               CFLAGS="-s -c -Wall -Werror -static -O1 -Wno-unused-result ${EXTRA_CFLAGS}" \
+               LDFLAGS="-s -static ${EXTRA_LDFLAGS}"
 
       - name: Build .deb package
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
           DEB_ARCH=${{ matrix.deb_arch }}
           PKG=minetunnel_${VERSION}_${DEB_ARCH}
-
-          mkdir -p ${PKG}/DEBIAN
-          mkdir -p ${PKG}/usr/bin
-
+          mkdir -p ${PKG}/DEBIAN ${PKG}/usr/bin
           cp minetunnel ${PKG}/usr/bin/minetunnel
           chmod 755 ${PKG}/usr/bin/minetunnel
-
           cat > ${PKG}/DEBIAN/control << EOF
           Package: minetunnel
           Version: ${VERSION}
@@ -123,7 +115,6 @@ jobs:
            Supports tun/tap interfaces over UDP and ICMP protocols.
           Depends:
           EOF
-
           dpkg-deb --build ${PKG}
 
       - name: Upload artifact
@@ -135,7 +126,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: build
-
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Get version from tag
         id: version
@@ -153,9 +144,7 @@ jobs:
           name: "MineTunnel v${{ steps.version.outputs.VERSION }}"
           body: |
             ## MineTunnel v${{ steps.version.outputs.VERSION }}
-
             Fully static builds (musl-based, portable across distros)
-
           files: dist/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
