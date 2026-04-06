@@ -103,9 +103,13 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
           DEB_ARCH=${{ matrix.deb_arch }}
           PKG=minetunnel_${VERSION}_${DEB_ARCH}
-          mkdir -p ${PKG}/DEBIAN ${PKG}/usr/bin
+
+          mkdir -p ${PKG}/DEBIAN
+          mkdir -p ${PKG}/usr/bin
+
           cp minetunnel ${PKG}/usr/bin/minetunnel
           chmod 755 ${PKG}/usr/bin/minetunnel
+
           cat > ${PKG}/DEBIAN/control << EOF
           Package: minetunnel
           Version: ${VERSION}
@@ -115,6 +119,7 @@ jobs:
            Supports tun/tap interfaces over UDP and ICMP protocols.
           Depends:
           EOF
+
           dpkg-deb --build ${PKG}
 
       - name: Upload artifact
