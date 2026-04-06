@@ -85,7 +85,7 @@ jobs:
           set -e
           T=${{ matrix.musl_toolchain }}
           echo "Downloading ${T}-cross.tgz from musl.cc..."
-          wget -4 -q --show-progress https://musl.cc/${T}-cross.tgz
+          wget -4 --show-progress https://musl.cc/${T}-cross.tgz
           tar -xzf ${T}-cross.tgz
           echo "$PWD/${T}-cross/bin" >> $GITHUB_PATH
 
