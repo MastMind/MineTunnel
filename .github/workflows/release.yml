@@ -79,7 +79,7 @@ jobs:
 
           for t in "${TOOLCHAINS[@]}"; do
             echo "Downloading $t..."
-            wget -q https://musl.cc/${t}-cross.tgz
+            wget -4 -q https://musl.cc/${t}-cross.tgz
             tar -xzf ${t}-cross.tgz
             echo "$PWD/${t}-cross/bin" >> $GITHUB_PATH
           done
