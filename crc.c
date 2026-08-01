@@ -27,6 +27,12 @@ static uint32_t general_crc32(unsigned char *buf, uint32_t len, uint32_t poly) {
     return crc ^ 0xFFFFFFFF;
 }
 
+/**
+ * Calculate CRC32 checksum
+ * @param buf Buffer to calculate checksum for
+ * @param len Buffer length
+ * @return CRC32 checksum value
+ */
 uint32_t crc32_calc(unsigned char *buf, uint32_t len) {
     return general_crc32(buf, len, POLYNOME_1);
 }

@@ -1,4 +1,9 @@
 minetunnel
 *.o
+*.so
 build
-
+*.json
+.ai
+CHANGES_SUMMARY.md
+CLAUDE.md
+test

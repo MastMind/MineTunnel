@@ -19,7 +19,6 @@
 #define PROG_NAME_LENGTH 256
 #ifndef _WIN32
 #define DEFAULT_PID_FILE "/var/run/minetunnel.pid"
-#define DEFAULT_CTL_PATH "/var/run/minetunnel_ctl"
 #endif
 #define DEFAULT_CONFIG_FILE "config.json"
 #define MAX_ENCRYPTOR_NAME 128
@@ -41,13 +40,15 @@
 #define MAX_JSON_STR_LENGTH 8192
 #define MAX_STR_LENGTH 8192
 
-#define SOCKET_SIZE 262144
-#define MAX_SIZE_OF_UDP_PACKET 65536
+#define EMBED_SCRIPT_PAYLOAD_MAX 16384
+
+#define SOCKET_SIZE 65535
+#define MAX_SIZE_OF_UDP_PACKET 65535
 
 #define DEFAULT_ICMP_ID 1234
 
 #define APP_NAME "MineTunnel"
-#define VERSION_STR "1.0.1"
+#define VERSION_STR "1.1.0"
 #define DEFAULT_MINE_TUN_NAME "mine_tun%d"
 #define DEFAULT_MINE_TAP_NAME "mine_tap%d"
 
@@ -90,7 +91,7 @@ typedef enum tun_mode_e {
 typedef enum encryptor_type_e {
     ENCRYPTOR_UNKNOWN = 0,
     ENCRYPTOR_SYMMETRIC,
-    ENCRYPTOR_ASYMMETRIC //TODO for future usage
+    // ENCRYPTOR_ASYMMETRIC //TODO for future usage
 } encryptor_type_t;
 
 

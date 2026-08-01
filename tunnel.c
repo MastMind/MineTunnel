@@ -35,6 +35,8 @@
 #include "crc.h"
 #include "defines.h"
 #include "utils.h"
+#include "embed_interpreter.h"
+#include "control_socket.h"
 #ifdef _WIN32
 #include "include/wintun.h"
 #include "tapctl.h"
@@ -103,7 +105,6 @@ typedef struct wintun_reader_ctx_s {
     tunnel_entity_t* tun;
 } wintun_reader_ctx_t;
 
-//#define IOCP_WRITE_POOL_SIZE  256
 #define IOCP_WRITE_POOL_SIZE 1024
 #define REPOST_SOCK_ATTEMPTS 8
 #define IOCP_KEY_STOP  ((ULONG_PTR)0xDEAD)
@@ -157,11 +158,17 @@ void PrintBuffer(unsigned char* buffer, uint32_t size);
 #endif
 
 
+/**
+ * Parse command line options
+ * @param argc Number of command line arguments
+ * @param argv Array of command line argument strings
+ * @return 0 on success, non-zero on error
+ */
 int tunnel_parse_opts(int argc, char** argv) {
 #ifdef _WIN32
-    const char* short_options = "hdvc:";
+    const char* short_options = "hdvc:l:";
 #else
-    const char* short_options = "hdvp:c:";
+    const char* short_options = "hdvp:c:l:V";
 #endif
 
     const struct option long_options[] = {
@@ -172,6 +179,7 @@ int tunnel_parse_opts(int argc, char** argv) {
         { "pid",     required_argument, NULL, 'p' },
 #endif
         { "config",  required_argument, NULL, 'c' },
+        { "control-port", required_argument, NULL, 'l' },
         { "version", no_argument, NULL, 'V' },
         { NULL, 0, NULL, 0 }
     };
@@ -209,6 +217,11 @@ int tunnel_parse_opts(int argc, char** argv) {
                     strncpy(opts.config_path, optarg, PATH_MAX - 1);
                 }
                 break;
+            case 'l':
+                if (*optarg != '\0') {
+                    opts.control_port = (uint16_t)atoi(optarg);
+                }
+                break;
             case 'V':
                 PrintVersion();
                 break;
@@ -220,6 +233,10 @@ int tunnel_parse_opts(int argc, char** argv) {
     return 0;
 }
 
+/**
+ * Start the tunnel application
+ * @return 0 on success, non-zero on error
+ */
 int tunnel_app_start() {
     tun_idx = 0;
     tap_idx = 0;
@@ -269,21 +286,42 @@ int tunnel_app_start() {
         return -5;
     }
 
+    if (embed_interpreter_init()) {
+        fprintf(stderr, "Error initializing embed scripts parser\n");
+        return -6;
+    }
+
     if (load_encryptors(&cfg)) {
         fprintf(stderr, "Can't load encryptors\n");
-        return -6;
+        return -7;
     }
 
     if (build_tunnels(&cfg)) {
         fprintf(stderr, "Can't start tunnels\n");
-        return -7;
+        return -8;
     }
 
     PrintInform("Tunnels are running!\n");
+
+    if (control_socket_start(tunnel_app_getControlPort())) {
+        PrintError("Warning: control socket failed to start\n");
+    }
+
     return tunnel_poll();
 }
 
+/**
+ * Stop the tunnel application
+ */
 void tunnel_app_stop() {
+    control_socket_stop();
+
+    if (*cfg.global_shutdown_embed_script != '\0') {
+        if (ExecEmbed(cfg.global_shutdown_embed_script, NULL)) {
+            PrintError("Error in execution of global shutdown embed script");
+        }
+    }
+
     if (*cfg.global_shutdown_script != '\0') {
         ExecScript(cfg.global_shutdown_script);
     }
@@ -345,8 +383,9 @@ void tunnel_app_stop() {
     if (cfg.encryptors) {
         free(cfg.encryptors);
     }
-#ifdef _WIN32
+  #ifdef _WIN32
     wintun_global_unload();
+    WSACleanup();
 #endif
     PrintInform("Tunnels are stopped!\n");
 
@@ -356,19 +395,78 @@ void tunnel_app_stop() {
         closelog();
     }
 #endif
+    embed_interpreter_deinit();
 }
 
+/**
+ * Get daemonize flag value
+ * @return 1 if daemon mode is enabled, 0 otherwise
+ */
 int tunnel_app_getDaemonize() {
     return opts.daemonize;
 }
 
+/**
+ * Get verbosity flag value
+ * @return 1 if verbose mode is enabled, 0 otherwise
+ */
 int tunnel_app_getVerbosity() {
     return opts.verbose;
 }
 
+uint16_t tunnel_app_getControlPort() {
+    return opts.control_port ? opts.control_port : CONTROL_DEFAULT_PORT;
+}
+
+/* Recursively walk the tunnels hash tree, collecting tunnel pointers. */
+static void tunnel_collect_walk(hash_table_t* node, tunnel_entity_t** out,
+                                int max_out, int* count) {
+    if (!node) {
+        return;
+    }
+    tunnel_collect_walk(node->left, out, max_out, count);
+
+    bh_list_t* it = node->data;
+    while (it) {
+        if (*count < max_out) {
+            out[(*count)++] = (tunnel_entity_t*)it->data;
+        }
+        it = it->next;
+    }
+
+    tunnel_collect_walk(node->right, out, max_out, count);
+}
+
+int tunnel_collect_all(tunnel_entity_t** out, int max_out) {
+    int count = 0;
+    if (out && max_out > 0) {
+        tunnel_collect_walk(tunnels_ht, out, max_out, &count);
+    }
+    return count;
+}
+
+tunnel_entity_t* tunnel_find_by_name(const char* name) {
+    if (!name) {
+        return NULL;
+    }
+    tunnel_entity_t* all[MAX_TUNNELS];
+    int n = tunnel_collect_all(all, MAX_TUNNELS);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(all[i]->tun_intf.tun_name, name) == 0) {
+            return all[i];
+        }
+    }
+    return NULL;
+}
+
 #ifdef _WIN32
 
-//Public API used by task.c to post an async WriteFile to the TAP HANDLE
+/**
+ * Write data asynchronously to TAP interface using IOCP
+ * @param tun_fd TAP interface handle
+ * @param buf Buffer containing data to write
+ * @param size Size of data to write
+ */
 void iocp_tap_write_async(HANDLE tun_fd, const char* buf, DWORD size) {
     iocp_ctx_t* ctx = iocp_ctx_write_alloc();
     ctx->hTap = tun_fd;
@@ -385,6 +483,12 @@ void iocp_tap_write_async(HANDLE tun_fd, const char* buf, DWORD size) {
     }
 }
 
+/**
+ * Write data asynchronously to TUN interface
+ * @param intf TUN interface structure
+ * @param buf Buffer containing data to write
+ * @param size Size of data to write
+ */
 void tun_write_async(tun_intf_t* intf, const char* buf, DWORD size) {
     if (intf->wintun_ctx) {
         wintun_send_packet((wintun_ctx_t*)intf->wintun_ctx, buf, size);
@@ -434,13 +538,14 @@ static void SigHandler(int signo) {
 
 static void PrintHelp(char* app_name) {
     fprintf(stdout, "Usage: %s [options]\n", app_name);
-    fprintf(stdout, "\t --daemon  -d : run in background mode (Linux only)\n");
-    fprintf(stdout, "\t --verbose -v : enable verbose output\n");
+    fprintf(stdout, "\t --daemon       -d : run in background mode (Linux only)\n");
+    fprintf(stdout, "\t --verbose      -v : enable verbose output\n");
 #ifndef _WIN32
-    fprintf(stdout, "\t --pid     -p : path to pid file (background mode only)\n");
+    fprintf(stdout, "\t --pid          -p : path to pid file (background mode only)\n");
 #endif
-    fprintf(stdout, "\t --config  -c : config path (default: ./config.json)\n");
-    fprintf(stdout, "\t --version    : print app's version\n");
+    fprintf(stdout, "\t --config       -c : config path (default: ./config.json)\n");
+    fprintf(stdout, "\t --version      -V : print app's version\n");
+    fprintf(stdout, "\t --control-port -l : set localhost's control port value (%u by default)\n", CONTROL_DEFAULT_PORT);
     exit(-1);
 }
 
@@ -513,6 +618,8 @@ static int load_encryptors(config_t* cfg) {
         LOAD_SYM(destroy_instance, "destroy_instance")
 
         hash_table_add(&encryptors_ht, encryptor, &encryptor_hash_func);
+
+        PrintInform("Encryptor loaded: %s (%s)\n", encryptor->name, tun_encryptor->module_path);
 
 #ifdef DEBUG
         fprintf(stdout, "Encryptor %s loaded successfully\n", tun_encryptor->module_path);
@@ -1076,11 +1183,16 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
 
         evlist_count++;
 #endif
-    }
+}
+
+    PrintInform("Interface initialized: %s (mode=%s, proto=%s)\n",
+               intf->tun_name,
+               intf->mode == MODE_TUN ? "tun" : "tap",
+               intf->proto == PROTO_UDP ? "udp" : "icmp");
 
     return 0;
 
-err_label:
+    err_label:
 #ifdef _WIN32
     if (intf->raw_socket_in && intf->raw_socket_in != INVALID_SOCKET) {
         closesocket(intf->raw_socket_in);
@@ -1179,6 +1291,8 @@ static int build_tunnels(config_t* cfg) {
 
         strncpy(tun.bringup_script, tun_info->bringup_script, PATH_MAX - 1);
         strncpy(tun.shutdown_script, tun_info->shutdown_script, PATH_MAX - 1);
+        strncpy(tun.bringup_embed, tun_info->bringup_embed_script, EMBED_SCRIPT_PAYLOAD_MAX - 1);
+        strncpy(tun.shutdown_embed, tun_info->shutdown_embed_script, EMBED_SCRIPT_PAYLOAD_MAX - 1);
 
         //optional encryptor
         if (*tun_info->encryptor_name != '\0') {
@@ -1218,10 +1332,18 @@ static int build_tunnels(config_t* cfg) {
 
             if (new_endpoint->remote_endpoint.value == 0) {
                 found_tun->dynamic_endpoints = 1;
+                PrintInform("Added dynamic endpoint to tunnel %s\n", found_tun->tun_intf.tun_name);
             } else {
                 bhlist_push_front(&found_tun->remote_endpoint_list, new_endpoint);
                 hash_table_add(&found_tun->remote_endpoint_ht,
                                found_tun->remote_endpoint_list, &endpoint_hash_func);
+                PrintInform("Added VTEP %u.%u.%u.%u:%u to tunnel %s\n",
+                           new_endpoint->remote_endpoint.addr[0],
+                           new_endpoint->remote_endpoint.addr[1],
+                           new_endpoint->remote_endpoint.addr[2],
+                           new_endpoint->remote_endpoint.addr[3],
+                           new_endpoint->remote_port,
+                           found_tun->tun_intf.tun_name);
             }
         } else {
             tunnel_entity_t* new_tun = (tunnel_entity_t*)malloc(sizeof(tunnel_entity_t));
@@ -1231,7 +1353,24 @@ static int build_tunnels(config_t* cfg) {
                 return -3;
             }
 
-            memcpy(new_tun, &tun, sizeof(tunnel_entity_t));
+            new_tun->local_endpoint = tun.local_endpoint;
+            new_tun->local_port = tun.local_port;
+            new_tun->icmp_identifier = tun.icmp_identifier;
+            new_tun->dynamic_endpoints = tun.dynamic_endpoints;
+            new_tun->encryptor = tun.encryptor;
+            new_tun->encryptor_instance = tun.encryptor_instance;
+            new_tun->tun_intf = tun.tun_intf;
+            strncpy(new_tun->bringup_script, tun.bringup_script, sizeof(new_tun->bringup_script) - 1);
+            new_tun->bringup_script[sizeof(new_tun->bringup_script) - 1] = '\0';
+            strncpy(new_tun->shutdown_script, tun.shutdown_script, sizeof(new_tun->shutdown_script) - 1);
+            new_tun->shutdown_script[sizeof(new_tun->shutdown_script) - 1] = '\0';
+            strncpy(new_tun->bringup_embed, tun.bringup_embed, sizeof(new_tun->bringup_embed) - 1);
+            new_tun->bringup_embed[sizeof(new_tun->bringup_embed) - 1] = '\0';
+            strncpy(new_tun->shutdown_embed, tun.shutdown_embed, sizeof(new_tun->shutdown_embed) - 1);
+            new_tun->shutdown_embed[sizeof(new_tun->shutdown_embed) - 1] = '\0';
+            new_tun->remote_endpoint_ht = NULL;
+            new_tun->remote_endpoint_list = NULL;
+            new_tun->worker = NULL;
 
             if (new_endpoint->remote_endpoint.value) {
                 bhlist_push_front(&new_tun->remote_endpoint_list, new_endpoint);
@@ -1245,11 +1384,39 @@ static int build_tunnels(config_t* cfg) {
                 return -4;
             }
 
+            if (*new_tun->bringup_embed != '\0') {
+                if (ExecEmbed(new_tun->bringup_embed, new_tun)) {
+                    free(new_endpoint);
+                    free(new_tun);
+                    return -5;
+                }
+            }
+
             if (*new_tun->bringup_script != '\0') {
                 ExecScript(new_tun->bringup_script);
             }
 
             hash_table_add(&tunnels_ht, new_tun, &tunnel_hash_func);
+
+            PrintInform("Tunnel created: %s (%s/%s, %u.%u.%u.%u -> %u.%u.%u.%u)\n",
+                       new_tun->tun_intf.tun_name,
+                       new_tun->tun_intf.proto == PROTO_UDP ? "udp" : "icmp",
+                       new_tun->tun_intf.mode == MODE_TUN ? "tun" : "tap",
+                       tun_info->local_endpoint.addr[0],
+                       tun_info->local_endpoint.addr[1],
+                       tun_info->local_endpoint.addr[2],
+                       tun_info->local_endpoint.addr[3],
+                       tun_info->remote_endpoint.addr[0],
+                       tun_info->remote_endpoint.addr[1],
+                       tun_info->remote_endpoint.addr[2],
+                       tun_info->remote_endpoint.addr[3]);
+        }
+    }
+
+    if (*cfg->global_bringup_embed_script != '\0') {
+        if (ExecEmbed(cfg->global_bringup_embed_script, NULL)) {
+            PrintError("Error in execution of global bringup embed script");
+            return -6;
         }
     }
 
@@ -1366,6 +1533,14 @@ static int tunnel_poll(void) {
 static void tunnel_stop(void* arg) {
     tunnel_entity_t* tun = (tunnel_entity_t*)arg;
 
+    PrintInform("Stopping tunnel: %s\n", tun->tun_intf.tun_name);
+
+    if (*tun->shutdown_embed != '\0') {
+        if (ExecEmbed(tun->shutdown_embed, tun)) {
+            PrintError("Error in execution of shutdown embed script for tunnel %s", tun->tun_intf.tun_name);
+        }
+    }
+
     if (*tun->shutdown_script != '\0') {
         ExecScript(tun->shutdown_script);
     }
@@ -1392,8 +1567,7 @@ static void tunnel_stop(void* arg) {
         CloseHandle(tun->tun_intf.tun_fd);
     }
 
-    WSACleanup();
-#else
+ #else
     if (tun->tun_intf.raw_socket_in) {
         close(tun->tun_intf.raw_socket_in);
     }
@@ -1408,7 +1582,10 @@ static void tunnel_stop(void* arg) {
 #endif
     if (tun->encryptor && tun->encryptor_instance) {
         tun->encryptor->destroy_instance(tun->encryptor_instance);
+        tun->encryptor_instance = NULL;
     }
+
+    free(tun);
 }
 
 static void encryptor_release(void* arg) {
@@ -1514,7 +1691,6 @@ static DWORD WINAPI wintun_reader_thread_func(LPVOID param) {
 }
 
 static DWORD WINAPI iocp_thread_func(LPVOID param) {
-    //(void)param;
     while (!sig_close) {
         DWORD bytes = 0;
         ULONG_PTR key = 0;

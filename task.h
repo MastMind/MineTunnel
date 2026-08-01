@@ -54,14 +54,13 @@ typedef struct worker_s {
     pthread_mutex_t     tun_cache_mutex;
     pthread_cond_t      cond_empty;
 #endif
-    //task_t              task_buf[MAX_TASKS];
     task_t*              task_buf;
     uint16_t            new_task_idx;
     uint16_t            cur_task_idx;
     hash_table_t*       tun_cache_ht;
     bh_deque_t*         tun_cache_list;
     int                 dyn_endpoints_enabled;
-    struct tunnel_entity_s* current_tun;  /* back-pointer for dyn_endpoints_thr */
+    struct tunnel_entity_s* current_tun;
 #ifdef _WIN32
     HANDLE              dyn_endpoints_thr;
     CRITICAL_SECTION    dyn_endpoints_mutex;
@@ -80,10 +79,35 @@ typedef struct tun_cache_s {
     uint16_t ttl;
 } tun_cache_t;
 
+/**
+ * Create a worker thread for processing tunnel tasks
+ * @param worker Worker structure to initialize
+ * @param tun Tunnel entity structure
+ */
 void task_create_worker(worker_t* worker, struct tunnel_entity_s* tun);
+
+/**
+ * Get a new task from the worker's task buffer
+ * @param worker Worker structure
+ * @param task Pointer to store the task
+ */
 void task_get_new(worker_t* worker, task_t** task);
+
+/**
+ * Release the current task and move to the next one
+ * @param worker Worker structure
+ */
 void task_release(worker_t* worker);
+
+/**
+ * Add a task to the worker's task queue
+ * @param worker Worker structure
+ */
 void task_add(worker_t* worker);
+
+/**
+ * Destroy all worker threads
+ */
 void task_destroy_all_workers();
 
 
