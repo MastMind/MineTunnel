@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     # Используем Alpine как среду сборки для всех целей. Это решает проблему с musl.cc
     container:
-      image: alpine/alpine-x86_64
+      image: alpine
     
     strategy:
       matrix:
