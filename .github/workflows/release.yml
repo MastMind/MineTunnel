@@ -13,60 +13,82 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Используем Alpine как среду сборки для всех целей. Это решает проблему с musl.cc
+    container:
+      image: alpine/alpine-x86_64
+    
     strategy:
       matrix:
         include:
           - arch: amd64
             deb_arch: amd64
+            apk_pkg: "gcc musl-dev" # Нативная сборка x86_64
             cc: gcc
             cflags: ""
             ldflags: ""
 
-          - arch: i686
+          - arch: i386
             deb_arch: i386
+            apk_pkg: "gcc-multilib musl-dev" # Кросс-компиляция 32-bit внутри x86_64 контейнера
             cc: gcc
             cflags: "-m32"
             ldflags: "-m32"
-            extra_packages: gcc-multilib
 
           - arch: arm64
             deb_arch: arm64
+            apk_pkg: "aarch64-linux-musl" # Пакет содержит aarch64-linux-musl-gcc
             cc: aarch64-linux-musl-gcc
-            musl_toolchain: aarch64-linux-musl
+            cflags: ""
+            ldflags: ""
 
           - arch: armv7
             deb_arch: armhf
+            apk_pkg: "arm-linux-musleabihf" 
             cc: arm-linux-musleabihf-gcc
-            musl_toolchain: arm-linux-musleabihf
             cflags: "-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
+            ldflags: ""
 
           - arch: armv6
             deb_arch: armel
+            apk_pkg: "arm-linux-musleabi" 
             cc: arm-linux-musleabi-gcc
-            musl_toolchain: arm-linux-musleabi
             cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=softfp"
+            ldflags: ""
 
           - arch: mips
             deb_arch: mips
+            apk_pkg: "mips-linux-musl" 
             cc: mips-linux-musl-gcc
-            musl_toolchain: mips-linux-musl
+            cflags: ""
+            ldflags: ""
 
           - arch: mipsel
             deb_arch: mipsel
+            apk_pkg: "mipsel-linux-musl" 
             cc: mipsel-linux-musl-gcc
-            musl_toolchain: mipsel-linux-musl
+            cflags: ""
+            ldflags: ""
 
           - arch: mips64
             deb_arch: mips64el
-            cc: mips64-linux-musl-gcc
-            musl_toolchain: mips64-linux-musl
+            apk_pkg: "mips64-linux-musl" # В Alpine иногда называется просто mips64-linux-musl или mipsisa64r6...
+            cc: mips64-linux-musl-gcc 
+            cflags: ""
+            ldflags: ""
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      # Устанавливаем зависимости внутри Alpine контейнера (быстро и надежно)
+      - name: Install dependencies
+        run: |
+          apk update && \
+          apk add --no-cache make bash dpkg ${{ matrix.apk_pkg }}
 
       - name: Get version
         id: version
+        shell: bash # Используем bash для совместимости с синтаксисом [[ ]]
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
@@ -74,28 +96,16 @@ jobs:
             echo "VERSION=${{ github.event.inputs.tag || '0.0.0-dev' }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install base packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc ${{ matrix.extra_packages }}
-
-      - name: Install musl cross toolchain
-        if: matrix.musl_toolchain != ''
-        run: |
-          set -e
-          T=${{ matrix.musl_toolchain }}
-          echo "Downloading ${T}-cross.tgz from musl.cc..."
-          wget -4 --show-progress https://musl.cc/${T}-cross.tgz
-          tar -xzf ${T}-cross.tgz
-          echo "$PWD/${T}-cross/bin" >> $GITHUB_PATH
-
       - name: Build binary
         run: |
-          echo "Using CC=${{ matrix.cc }}"
+          echo "Building for arch: ${{ matrix.arch }} using CC=${{ matrix.cc }}"
+          
+          # Формируем флаги, добавляем -static для musl (обычно дефолт в Alpine кросс-тулчейнах, но явно не помешает)
           EXTRA_CFLAGS="${{ matrix.cflags }}"
           EXTRA_LDFLAGS="${{ matrix.ldflags }}"
+          
           make CC=${{ matrix.cc }} \
-               CFLAGS="-s -c -Wall -Werror -static -O1 -Wno-unused-result ${EXTRA_CFLAGS}" \
+               CFLAGS="-s -Wall -Werror -static -O1 -Wno-unused-result ${EXTRA_CFLAGS}" \
                LDFLAGS="-s -static ${EXTRA_LDFLAGS}"
 
       - name: Build .deb package
@@ -103,11 +113,12 @@ jobs:
           VERSION=${{ steps.version.outputs.VERSION }}
           DEB_ARCH=${{ matrix.deb_arch }}
           PKG=minetunnel_${VERSION}_${DEB_ARCH}
-
+          
           mkdir -p ${PKG}/DEBIAN
           mkdir -p ${PKG}/usr/bin
-
-          cp minetunnel ${PKG}/usr/bin/minetunnel
+          
+          # Копируем бинарник (если он называется иначе, поправьте имя)
+          cp minetunnel ${PKG}/usr/bin/minetunnel 
           chmod 755 ${PKG}/usr/bin/minetunnel
 
           cat > ${PKG}/DEBIAN/control << EOF
@@ -117,8 +128,9 @@ jobs:
           Maintainer: MastMind
           Description: Simple application for creating VPN tunnels
            Supports tun/tap interfaces over UDP and ICMP protocols.
-          Depends:
-
+          Depends: 
+          Section: net
+          Priority: optional
           EOF
 
           dpkg-deb --build ${PKG}
@@ -137,7 +149,7 @@ jobs:
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
+      
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -150,7 +162,9 @@ jobs:
           name: "MineTunnel v${{ steps.version.outputs.VERSION }}"
           body: |
             ## MineTunnel v${{ steps.version.outputs.VERSION }}
-            Fully static builds (musl-based, portable across distros)
+            
+            Fully static builds (musl-based, portable across distros).
+            Built using Alpine Linux toolchains.
           files: dist/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
