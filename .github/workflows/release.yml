@@ -83,8 +83,8 @@ jobs:
       # Устанавливаем зависимости внутри Alpine контейнера (быстро и надежно)
       - name: Install dependencies
         run: |
-          apk update && \
-          apk add --no-cache make bash dpkg ${{ matrix.apk_pkg }}
+          apt update && \
+          apt add --no-cache make bash dpkg ${{ matrix.apk_pkg }}
 
       - name: Get version
         id: version
