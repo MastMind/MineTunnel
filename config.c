@@ -42,6 +42,12 @@ static int encryptors_parsing(json_array_t json_encryptors, config_t* cfg);
 static int tunnel_exists(tun_info_t* tunnels, uint16_t tunnels_count, ipv4_addr remote_addr, ipv4_addr local_addr, uint16_t remote_port, uint16_t local_port);
 static int encryptor_exists(tun_encryptor_t* encryptors, uint16_t encryptors_count, const char* name);
 
+/**
+ * Parse configuration from JSON file
+ * @param cfg Configuration structure to fill
+ * @param json_cfg_path Path to JSON configuration file
+ * @return 0 on success, non-zero on error
+ */
 int parse_config(config_t* cfg, char* json_cfg_path) {
     int ret = 0;
     json_object_t json_root_msg = NULL;
@@ -55,6 +61,7 @@ int parse_config(config_t* cfg, char* json_cfg_path) {
 
     memset(cfg, 0, sizeof(config_t));
 
+    PrintInform("Loading config from: %s\n", json_cfg_path);
     json_root = json_from_file(json_cfg_path);
 
     if (!json_root) {
@@ -131,6 +138,28 @@ int parse_config(config_t* cfg, char* json_cfg_path) {
         }
     }
 
+    //parse global optional bringup_embed_script payload
+    element = json_object_get_element(json_root_msg, "bringup_embed");
+
+    if (element) {
+        char* bringup_embed_script = (char*)(element->value);
+
+        if (bringup_embed_script) {
+            strncpy(cfg->global_bringup_embed_script, bringup_embed_script, EMBED_SCRIPT_PAYLOAD_MAX);
+        }
+    }
+
+    //parse global optional shutdown_embed_script payload
+    element = json_object_get_element(json_root_msg, "shutdown_embed");
+
+    if (element) {
+        char* shutdown_embed_script = (char*)(element->value);
+
+        if (shutdown_embed_script) {
+            strncpy(cfg->global_shutdown_embed_script, shutdown_embed_script, EMBED_SCRIPT_PAYLOAD_MAX);
+        }
+    }
+
     //encryption plugins parsing
     element = json_object_get_element(json_root_msg, "encryption_plugins");
 
@@ -140,6 +169,7 @@ int parse_config(config_t* cfg, char* json_cfg_path) {
             ret = -7;
             goto err;
         }
+        PrintInform("Config loaded: %d encryptor(s)\n", cfg->encryptors_count);
     }
 
     //tunnels parsing
@@ -469,6 +499,28 @@ static int tunnels_parsing(json_array_t json_tunnnels, config_t* cfg) {
             }
         }
 
+        //parse optional bringup_embed_script payload
+        element = json_object_get_element(json_tunnel, "bringup_embed");
+
+        if (element) {
+            char* bringup_embed_script = (char*)(element->value);
+
+            if (bringup_embed_script) {
+                strncpy(tun_info->bringup_embed_script, bringup_embed_script, EMBED_SCRIPT_PAYLOAD_MAX);
+            }
+        }
+
+        //parse optional shutdown_embed_script payload
+        element = json_object_get_element(json_tunnel, "shutdown_embed");
+
+        if (element) {
+            char* shutdown_embed_script = (char*)(element->value);
+
+            if (shutdown_embed_script) {
+                strncpy(tun_info->shutdown_embed_script, shutdown_embed_script, EMBED_SCRIPT_PAYLOAD_MAX);
+            }
+        }
+
         //parse optional icmp id (only for icmp proto)
         element = json_object_get_element(json_tunnel, "icmp_id");
 
@@ -488,6 +540,8 @@ static int tunnels_parsing(json_array_t json_tunnnels, config_t* cfg) {
     }
 
     cfg->tunnels_count = json_tunnnels->size;
+
+    PrintInform("Config loaded: %d tunnels\n", cfg->tunnels_count);
 
 err:
     if (ret) {
@@ -554,17 +608,46 @@ static int encryptors_parsing(json_array_t json_encryptors, config_t* cfg) {
 
         strncpy(encryptors->name, encryptor_name, MAX_ENCRYPTOR_NAME);
 
-        element = json_object_get_element(json_encryptor, "path");
+        //try to find path_auto key (universal path to the encryption module)
+        element = json_object_get_element(json_encryptor, "path_auto");
 
-        if (!element || element->type != STRING) {
-            PrintError("Syntax error in json config tunnels section. Bad encryptor json's array value. Key \"path\" not found\n");
-            ret = -6;
-            goto err;
+        if (element) {
+            if (element->type != STRING) {
+                PrintError("Syntax error in json config tunnels section. Bad encryptor json's array value. Key \"path_auto\" is not valid value\n");
+                ret = -6;
+                goto err;
+            }
+
+            char module_path[PATH_MAX] = "";
+
+            strncpy(module_path, (char*)element->value, PATH_MAX);
+#ifdef _WIN32
+            strncat(module_path, ".dll", PATH_MAX - 1);
+#else
+            strncat(module_path, ".so", PATH_MAX - 1);
+#endif
+            strncpy(encryptors->module_path, module_path, PATH_MAX);
         }
 
-        char* module_path = (char*)(element->value);
+        element = json_object_get_element(json_encryptor, "path");
 
-        strncpy(encryptors->module_path, module_path, PATH_MAX);
+        if (element) {
+            if (element->type != STRING) {
+                PrintError("Syntax error in json config tunnels section. Bad encryptor json's array value. Key \"path\" is not valid value\n");
+                ret = -7;
+                goto err;
+            }
+
+            char* module_path = (char*)(element->value);
+
+            strncpy(encryptors->module_path, module_path, PATH_MAX);
+        }
+
+        if (!(*(encryptors->module_path))) {
+            PrintError("Syntax error in json config tunnels section. Bad encryptor json's array value. Key \"path\" or \"path_auto\" not found\n");
+            ret = -8;
+            goto err;
+        }
 
         encryptors++;
     }

@@ -23,6 +23,7 @@ static WINTUN_RECEIVE_PACKET_FUNC* fn_ReceivePacket = NULL;
 static WINTUN_RELEASE_RECEIVE_PACKET_FUNC* fn_ReleaseReceivePacket = NULL;
 static WINTUN_ALLOCATE_SEND_PACKET_FUNC* fn_AllocateSendPacket = NULL;
 static WINTUN_SEND_PACKET_FUNC* fn_SendPacket = NULL;
+static WINTUN_GET_ADAPTER_LUID_FUNC* fn_GetAdapterLUID = NULL;
 
 #define LOAD_FN(var, type, name) \
     do { \
@@ -57,6 +58,7 @@ DWORD wintun_global_load(void) {
     LOAD_FN(fn_ReleaseReceivePacket, WINTUN_RELEASE_RECEIVE_PACKET_FUNC, "WintunReleaseReceivePacket");
     LOAD_FN(fn_AllocateSendPacket, WINTUN_ALLOCATE_SEND_PACKET_FUNC, "WintunAllocateSendPacket");
     LOAD_FN(fn_SendPacket, WINTUN_SEND_PACKET_FUNC, "WintunSendPacket");
+    LOAD_FN(fn_GetAdapterLUID, WINTUN_GET_ADAPTER_LUID_FUNC, "WintunGetAdapterLUID");
 
 #ifdef DEBUG
     PrintInform("tunctl: wintun.dll loaded\n");
@@ -81,6 +83,21 @@ void wintun_global_unload(void) {
     fn_ReleaseReceivePacket = NULL;
     fn_AllocateSendPacket = NULL;
     fn_SendPacket = NULL;
+    fn_GetAdapterLUID = NULL;
+}
+
+DWORD wintun_get_adapter_luid(wintun_ctx_t* ctx, NET_LUID* luid) {
+    if (!ctx || !ctx->adapter || !luid) {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    if (!fn_GetAdapterLUID) {
+        PrintError("tunctl: WintunGetAdapterLUID not loaded\n");
+        return ERROR_PROC_NOT_FOUND;
+    }
+
+    fn_GetAdapterLUID(ctx->adapter, luid);
+    return ERROR_SUCCESS;
 }
 
 DWORD wintun_create(wintun_ctx_t* ctx, LPCSTR name) {

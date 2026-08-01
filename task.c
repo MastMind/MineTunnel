@@ -110,6 +110,11 @@ static unsigned short checksum(void *b, int len);
 #endif
 
 
+/**
+ * Create a worker thread for processing tunnel tasks
+ * @param worker Worker structure to initialize
+ * @param tun Tunnel entity structure
+ */
 void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     if (!worker) {
         return;
@@ -179,13 +184,26 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
 
     workers[size] = worker;
     size++;
+
+#ifdef DEBUG
+    PrintInform("Worker created for tunnel %s\n", tun->tun_intf.tun_name);
+#endif
 }
 
+/**
+ * Get a new task from the worker's task buffer
+ * @param worker Worker structure
+ * @param task Pointer to store the task
+ */
 void task_get_new(worker_t* worker, task_t** task) {
     WORKER_MUTEX_LOCK(worker);
     *task = &worker->task_buf[worker->new_task_idx];
 }
 
+/**
+ * Add a task to the worker's task queue
+ * @param worker Worker structure
+ */
 void task_add(worker_t* worker) {
     if (worker->new_task_idx == MAX_TASKS - 1) {
         worker->new_task_idx = 0;
@@ -197,9 +215,19 @@ void task_add(worker_t* worker) {
     WORKER_MUTEX_UNLOCK(worker);
 }
 
+/**
+ * Destroy all worker threads
+ */
 void task_destroy_all_workers() {
     for (uint16_t i = 0; i < size; i++) {
         worker_t* w = workers[i];
+#ifdef DEBUG
+        if (w->current_tun) {
+            PrintInform("Worker destroyed for tunnel %s\n", w->current_tun->tun_intf.tun_name);
+        } else {
+            PrintInform("Worker destroyed (worker #%d)\n", i);
+        }
+#endif
         for (uint16_t j = 0; j < MAX_TASKS; ++j) {
             free(w->task_buf[j].buffer);
         }
@@ -285,6 +313,13 @@ static void *thread_func(void *param)
         fd_tun_map_t* current_tun_map = current_task->tun_map;
         tunnel_entity_t* current_tun = current_tun_map->tun;
         enc_entinty_t* current_encryptor = current_tun->encryptor;
+
+#ifdef DEBUG
+        static unsigned int pkt_counter = 0;
+        if (++pkt_counter % 100 == 0) {
+            PrintInform("Worker: %u packets processed\n", pkt_counter);
+        }
+#endif
 
 #ifdef _WIN32
         int fd = current_tun_map->fd;
@@ -392,13 +427,24 @@ static void *thread_func(void *param)
 
                 case PROTO_ICMP: {
                     if (current_encryptor) {
+                        uint16_t hdr_len = 0;
 #ifdef _WIN32
+                        hdr_len = (uint16_t)(sizeof(ip_hdr_t) + sizeof(struct icmp));
+                        if (current_task->size <= hdr_len) {
+                            break;
+                        }
+
                         current_task->size = current_encryptor->decrypt(
                             current_tun->encryptor_instance,
                             current_task->buffer + sizeof(ip_hdr_t) + sizeof(struct icmp),
                             current_task->size - (sizeof(ip_hdr_t) + sizeof(struct icmp)));
                         current_task->size += (uint16_t)(sizeof(ip_hdr_t) + sizeof(struct icmp));
 #else
+                        hdr_len = (uint16_t)(sizeof(struct ip) + sizeof(struct icmp));
+                        if (current_task->size <= hdr_len) {
+                            break;
+                        }
+
                         current_task->size = current_encryptor->decrypt(
                             current_tun->encryptor_instance,
                             current_task->buffer + sizeof(struct ip) + sizeof(struct icmp),
@@ -1030,10 +1076,12 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size,
 
 static void free_remote_endpoint_from_ht(void* data) {
     bh_list_t* element = (bh_list_t*)data;
-    if (element->data) {
-        free(element->data);
+    if (element) {
+        if (element->data) {
+            free(element->data);
+        }
+        free(element);
     }
-    free(element);
 }
 
 static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t size,

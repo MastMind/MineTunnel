@@ -28,8 +28,6 @@
     CTL_CODE(FILE_DEVICE_UNKNOWN, (n), METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define TAP_IOCTL_SET_MEDIA_STATUS  TAP_WIN_IOCTL(0x06)
-// #define TAP_IOCTL_CONFIG_TUN        TAP_WIN_IOCTL(0x0a)
-// #define TAP_IOCTL_CONFIG_P2P        TAP_WIN_IOCTL(0x05)
 
 
 static void *find_function(const WCHAR *libname, const char *funcname, HMODULE *m);

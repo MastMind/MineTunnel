@@ -3,13 +3,18 @@
 #include <string.h>
 
 #include "json.h"
+#include "utils.h"
 
 
 
 
-static char* strip_line(const char* line);
 static int parse_line(json_value_t v, const char* buf);
 
+
+/**
+ * Create a new JSON array
+ * @return Pointer to created JSON array
+ */
 json_array_t json_array_create(void) {
     json_array_t ret = (json_array_t)malloc(sizeof(struct json_array));
     if (!ret) {
@@ -25,6 +30,10 @@ json_array_t json_array_create(void) {
     return ret;
 }
 
+/**
+ * Create a new JSON object
+ * @return Pointer to created JSON object
+ */
 json_object_t json_object_create(void) {
     json_object_t ret = (json_object_t)malloc(sizeof(struct json_object));
     if (!ret) {
@@ -39,6 +48,12 @@ json_object_t json_object_create(void) {
     return ret;
 }
 
+/**
+ * Add string element to JSON array
+ * @param o JSON array
+ * @param e String to add
+ * @return 0 on success, non-zero on error
+ */
 int json_array_add_string(json_array_t o, const char* e) {
     if (!o) {
 #ifndef JSON_NO_PRINT_ERRORS
@@ -84,6 +99,12 @@ int json_array_add_string(json_array_t o, const char* e) {
     return 0;
 }
 
+/**
+ * Add array element to JSON array
+ * @param o JSON array
+ * @param e Array to add
+ * @return 0 on success, non-zero on error
+ */
 int json_array_add_array(json_array_t o, json_array_t e) {
     if (!o) {
 #ifndef JSON_NO_PRINT_ERRORS
@@ -123,6 +144,12 @@ int json_array_add_array(json_array_t o, json_array_t e) {
     return 0;
 }
 
+/**
+ * Add object element to JSON array
+ * @param o JSON array
+ * @param e Object to add
+ * @return 0 on success, non-zero on error
+ */
 int json_array_add_object(json_array_t o, json_object_t e) {
     if (!o) {
 #ifndef JSON_NO_PRINT_ERRORS
@@ -162,6 +189,12 @@ int json_array_add_object(json_array_t o, json_object_t e) {
     return 0;
 }
 
+/**
+ * Get element from JSON array by index
+ * @param o JSON array
+ * @param index Element index
+ * @return Pointer to JSON value
+ */
 json_value_t json_array_get_element(json_array_t o, unsigned int index) {
     if (!o) {
         return NULL;
@@ -174,6 +207,12 @@ json_value_t json_array_get_element(json_array_t o, unsigned int index) {
     return *(o->element + index);
 }
 
+/**
+ * Delete element from JSON array by index
+ * @param o JSON array
+ * @param index Element index
+ * @return 0 on success, non-zero on error
+ */
 int json_array_del_element(json_array_t o, unsigned int index) {
     if (!o) {
         return -1;
@@ -226,6 +265,11 @@ int json_array_del_element(json_array_t o, unsigned int index) {
     return 0;
 }
 
+/**
+ * Clear JSON array
+ * @param o JSON array
+ * @return 0 on success, non-zero on error
+ */
 int json_array_clear(json_array_t o) {
     if (!o) { 
         return -1;
@@ -262,6 +306,13 @@ int json_array_clear(json_array_t o) {
     return 0;
 }
 
+/**
+ * Add string element to JSON object
+ * @param o JSON object
+ * @param key Element key
+ * @param e String value
+ * @return 0 on success, non-zero on error
+ */
 int json_object_add_string(json_object_t o, const char* key, const char* e) {
     if (!o || !key || !strlen(key)) {
 #ifndef JSON_NO_PRINT_ERRORS
@@ -329,6 +380,13 @@ int json_object_add_string(json_object_t o, const char* key, const char* e) {
     return 0;
 }
 
+/**
+ * Add array element to JSON object
+ * @param o JSON object
+ * @param key Element key
+ * @param e Array value
+ * @return 0 on success, non-zero on error
+ */
 int json_object_add_array(json_object_t o, const char* key, json_array_t e) {
     if (!o || !key || !strlen(key)) {
 #ifndef JSON_NO_PRINT_ERRORS
@@ -389,6 +447,13 @@ int json_object_add_array(json_object_t o, const char* key, json_array_t e) {
     return 0;
 }
 
+/**
+ * Add object element to JSON object
+ * @param o JSON object
+ * @param key Element key
+ * @param e Object value
+ * @return 0 on success, non-zero on error
+ */
 int json_object_add_object(json_object_t o, const char* key, json_object_t e) {
         if (!o || !key || !strlen(key)) {
 #ifndef JSON_NO_PRINT_ERRORS
@@ -449,6 +514,12 @@ int json_object_add_object(json_object_t o, const char* key, json_object_t e) {
     return 0;
 }
 
+/**
+ * Get element from JSON object by key
+ * @param o JSON object
+ * @param key Element key
+ * @return Pointer to JSON value
+ */
 json_value_t json_object_get_element(json_object_t o, const char* key) {
     if (!o || !key) {
         return NULL;
@@ -465,6 +536,12 @@ json_value_t json_object_get_element(json_object_t o, const char* key) {
     return NULL;
 }
 
+/**
+ * Delete element from JSON object by key
+ * @param o JSON object
+ * @param key Element key
+ * @return 0 on success, non-zero on error
+ */
 int json_object_del_element(json_object_t o, const char* key) {
     if (!o || !key) {
         return -1;
@@ -528,6 +605,11 @@ int json_object_del_element(json_object_t o, const char* key) {
     return 0;
 }
 
+/**
+ * Clear JSON object
+ * @param o JSON object
+ * @return 0 on success, non-zero on error
+ */
 int json_object_clear(json_object_t o) {
     if (!o) { 
         return -1;
@@ -569,6 +651,12 @@ int json_object_clear(json_object_t o) {
     return 0;
 }
 
+/**
+ * Convert JSON array to string
+ * @param array JSON array
+ * @param str Buffer to store string
+ * @return 0 on success, non-zero on error
+ */
 int json_array_to_str(json_array_t array, char* str) {
     if (!array || !str) {
         return -1;
@@ -612,6 +700,12 @@ int json_array_to_str(json_array_t array, char* str) {
     return 0;
 }
 
+/**
+ * Convert JSON object to string
+ * @param object JSON object
+ * @param str Buffer to store string
+ * @return 0 on success, non-zero on error
+ */
 int json_object_to_str(json_object_t object, char* str) {
     if (!object || !str) {
         return -1;
@@ -659,8 +753,12 @@ int json_object_to_str(json_object_t object, char* str) {
     return 0;
 }
 
+/**
+ * Print JSON array to file (DEBUG only)
+ * @param f File handle
+ * @param array JSON array
+ */
 #ifdef DEBUG
-
 void json_array_print(FILE* f, json_array_t array) {
     fprintf(f, "[");
 
@@ -686,6 +784,11 @@ void json_array_print(FILE* f, json_array_t array) {
     fprintf(f, "]");
 }
 
+/**
+ * Print JSON object to file (DEBUG only)
+ * @param f File handle
+ * @param object JSON object
+ */
 void json_object_print(FILE* f, json_object_t object) {
     fprintf(f, "{");
 
@@ -717,6 +820,11 @@ void json_object_print(FILE* f, json_object_t object) {
 
 #endif
 
+/**
+ * Parse JSON from file
+ * @param filename File path
+ * @return Pointer to JSON value
+ */
 json_value_t json_from_file(const char* filename) {
     if (!filename || !strlen(filename)) {
         return NULL;
@@ -779,6 +887,11 @@ json_value_t json_from_file(const char* filename) {
     return ret;
 }
 
+/**
+ * Parse JSON from string
+ * @param str JSON string
+ * @return Pointer to JSON value
+ */
 json_value_t json_from_string(const char* str) {
     if (!str || !strlen(str)) {
         return NULL;
@@ -807,36 +920,6 @@ json_value_t json_from_string(const char* str) {
 
         free(ret);
         ret = NULL;
-    }
-
-    return ret;
-}
-
-static char* strip_line(const char* line) {
-    if (!line) {
-        return NULL;
-    }
-
-    char* ret = (char*)strdup(line + strspn(line, " \n\t"));
-    if (!ret) {
-#ifndef JSON_NO_PRINT_ERRORS
-        fprintf(stderr, "strip_line : can't allocate memory\n");
-#endif
-        return NULL;
-    }
-
-    unsigned int str_length = strlen(ret);
-
-    if (!str_length) {
-        free(ret);
-        return NULL;
-    }
-
-    for (unsigned int i = str_length - 1; i >= 0; i--) {
-        if (ret[i] != ' ' && ret[i] != '\n' && ret[i] != '\t') {
-            ret[i + 1] = '\0';
-            break;
-        }
     }
 
     return ret;

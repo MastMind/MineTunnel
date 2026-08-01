@@ -24,11 +24,12 @@ typedef struct tun_info_s {
     tun_proto_t proto;
     tun_mode_t mode;
     char encryptor_name[MAX_ENCRYPTOR_NAME]; //name of encryption plugin which registered in global config. This name uses as ID. By default "none" means no encryption
-
     //optional params (actualy some of them are necessary)
     char dev_name[MAX_DEV_NAME_LENGTH]; //overrided name of the virtual interface
     char bringup_script[PATH_MAX]; //helper script for setup which must be executed after starting of the virtual interface
     char shutdown_script[PATH_MAX]; //helper script for tear down which must be executed before removing of the virtual interface
+    char bringup_embed_script[EMBED_SCRIPT_PAYLOAD_MAX];
+    char shutdown_embed_script[EMBED_SCRIPT_PAYLOAD_MAX];
     char encryption_params[MAX_JSON_STR_LENGTH];
     uint16_t icmp_id; //override icmp id field in icmp packet (used only for icmp tunnel's type)
 } tun_info_t;
@@ -38,6 +39,8 @@ typedef struct config_s {
     uint16_t default_port;
     char global_bringup_script[PATH_MAX]; //helper script for setup which must be executed after starting ALL tunnels
     char global_shutdown_script[PATH_MAX]; //helper script for tear down which must be executed before removing ALL tunnels
+    char global_bringup_embed_script[EMBED_SCRIPT_PAYLOAD_MAX];
+    char global_shutdown_embed_script[EMBED_SCRIPT_PAYLOAD_MAX];
     tun_info_t* tunnels;
     uint16_t tunnels_count;
     tun_encryptor_t* encryptors;
@@ -45,6 +48,12 @@ typedef struct config_s {
 } config_t;
 
 
+/**
+ * Parse configuration from JSON file
+ * @param cfg Configuration structure to fill
+ * @param json_cfg_path Path to JSON configuration file
+ * @return 0 on success, non-zero on error
+ */
 int parse_config(config_t* cfg, char* json_cfg_path);
 
 

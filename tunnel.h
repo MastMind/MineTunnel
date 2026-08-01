@@ -27,6 +27,7 @@ typedef struct opts_s {
     char pidfile_path[PATH_MAX];
 #endif
     char config_path[PATH_MAX];
+    uint16_t control_port;
 } options_t;
 
 typedef struct tun_intf_s {
@@ -66,6 +67,8 @@ typedef struct tunnel_entity_s {
     tun_intf_t tun_intf;
     char bringup_script[PATH_MAX];
     char shutdown_script[PATH_MAX];
+    char bringup_embed[EMBED_SCRIPT_PAYLOAD_MAX];
+    char shutdown_embed[EMBED_SCRIPT_PAYLOAD_MAX];
     enc_entinty_t* encryptor;
     void* encryptor_instance;
     worker_t* worker;
@@ -76,15 +79,71 @@ typedef struct fd_tun_map_s {
     tunnel_entity_t* tun;
 } fd_tun_map_t;
 
+/**
+ * Parse command line options
+ * @param argc Number of command line arguments
+ * @param argv Array of command line argument strings
+ * @return 0 on success, non-zero on error
+ */
 int tunnel_parse_opts(int argc, char** argv);
+
+/**
+ * Start the tunnel application
+ * @return 0 on success, non-zero on error
+ */
 int tunnel_app_start();
+
+/**
+ * Stop the tunnel application
+ */
 void tunnel_app_stop();
 
+/**
+ * Get daemonize flag value
+ * @return 1 if daemon mode is enabled, 0 otherwise
+ */
 int tunnel_app_getDaemonize();
+
+/**
+ * Get verbosity flag value
+ * @return 1 if verbose mode is enabled, 0 otherwise
+ */
 int tunnel_app_getVerbosity();
 
+/**
+ * Get control socket TCP port (from -l, or the default when unset)
+ * @return TCP port number
+ */
+uint16_t tunnel_app_getControlPort();
+
+/**
+ * Collect pointers to all active tunnels into out[] (up to max_out).
+ * The tunnel set is immutable after startup, so no locking is required.
+ * @return number of tunnels written
+ */
+int tunnel_collect_all(tunnel_entity_t** out, int max_out);
+
+/**
+ * Find an active tunnel by its interface name.
+ * @return tunnel pointer or NULL if not found
+ */
+tunnel_entity_t* tunnel_find_by_name(const char* name);
+
 #ifdef _WIN32
+/**
+ * Write data asynchronously to TAP interface using IOCP
+ * @param tun_fd TAP interface handle
+ * @param buf Buffer containing data to write
+ * @param size Size of data to write
+ */
 void iocp_tap_write_async(HANDLE tun_fd, const char* buf, DWORD size);
+
+/**
+ * Write data asynchronously to TUN interface
+ * @param intf TUN interface structure
+ * @param buf Buffer containing data to write
+ * @param size Size of data to write
+ */
 void tun_write_async(tun_intf_t* intf, const char* buf, DWORD size);
 #endif
 
