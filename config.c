@@ -123,7 +123,8 @@ int parse_config(config_t* cfg, char* json_cfg_path) {
         char* default_bringup_string = (char*)(element->value);
 
         if (default_bringup_string) {
-            strncpy(cfg->global_bringup_script, default_bringup_string, PATH_MAX);
+            strncpy(cfg->global_bringup_script, default_bringup_string, PATH_MAX - 1);
+            cfg->global_bringup_script[PATH_MAX - 1] = '\0';
         }
     }
 
@@ -134,7 +135,8 @@ int parse_config(config_t* cfg, char* json_cfg_path) {
         char* default_shutdown_string = (char*)((json_object_get_element(json_root_msg, "shutdown_script"))->value);
 
         if (default_shutdown_string) {
-            strncpy(cfg->global_shutdown_script, default_shutdown_string, PATH_MAX);
+            strncpy(cfg->global_shutdown_script, default_shutdown_string, PATH_MAX - 1);
+            cfg->global_shutdown_script[PATH_MAX - 1] = '\0';
         }
     }
 
@@ -484,7 +486,8 @@ static int tunnels_parsing(json_array_t json_tunnnels, config_t* cfg) {
             char* bringup_script_str = (char*)(element->value);
 
             if (bringup_script_str) {
-                strncpy(tun_info->bringup_script, bringup_script_str, PATH_MAX);
+                strncpy(tun_info->bringup_script, bringup_script_str, PATH_MAX - 1);
+                tun_info->bringup_script[PATH_MAX - 1] = '\0';
             }
         }
 
@@ -495,7 +498,8 @@ static int tunnels_parsing(json_array_t json_tunnnels, config_t* cfg) {
             char* shutdown_script_str = (char*)(element->value);
 
             if (shutdown_script_str) {
-                strncpy(tun_info->shutdown_script, shutdown_script_str, PATH_MAX);
+                strncpy(tun_info->shutdown_script, shutdown_script_str, PATH_MAX - 1);
+                tun_info->shutdown_script[PATH_MAX - 1] = '\0';
             }
         }
 
@@ -640,7 +644,8 @@ static int encryptors_parsing(json_array_t json_encryptors, config_t* cfg) {
 
             char* module_path = (char*)(element->value);
 
-            strncpy(encryptors->module_path, module_path, PATH_MAX);
+            strncpy(encryptors->module_path, module_path, PATH_MAX - 1);
+            encryptors->module_path[PATH_MAX - 1] = '\0';
         }
 
         if (!(*(encryptors->module_path))) {

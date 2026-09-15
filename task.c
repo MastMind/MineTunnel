@@ -825,6 +825,9 @@ static ssize_t recv_icmp(int tun_socket, char* recvbuf, uint16_t size,
 #endif
 {
 #ifdef _WIN32
+    if (size < sizeof(ip_hdr_t) + sizeof(struct icmp)) {
+        return 0;
+    }
     ip_hdr_t* iphdr = (ip_hdr_t*)recvbuf;
     struct icmp* icmphdr = (struct icmp*)(recvbuf + sizeof(ip_hdr_t));
 
@@ -847,9 +850,15 @@ static ssize_t recv_icmp(int tun_socket, char* recvbuf, uint16_t size,
     tun_write_async(intf, payload, payload_size);
     return (ssize_t)payload_size;
 #else
+    if (size < sizeof(struct ip) + sizeof(struct icmp)) {
+        return 0;
+    }
     struct ip* iphdr = (struct ip*)recvbuf;
     struct icmp* icmphdr = (struct icmp*)(recvbuf + sizeof(struct ip));
 
+    if (iphdr->ip_v != 4 || icmphdr->icmp_type != ICMP_ECHO) {
+        return 0;
+    }
     if (local_endpoint.value == iphdr->ip_dst.s_addr &&
         local_port == icmphdr->icmp_id) {
         return write(tun_socket,

@@ -47,7 +47,7 @@
 
 
 static options_t opts;
-static volatile int sig_close = 0;
+static volatile sig_atomic_t sig_close = 0;
 static config_t cfg;
 static hash_table_t* tunnels_ht = NULL;
 static hash_table_t* sck_tun_ht = NULL;
@@ -1386,7 +1386,6 @@ static int build_tunnels(config_t* cfg) {
 
             if (*new_tun->bringup_embed != '\0') {
                 if (ExecEmbed(new_tun->bringup_embed, new_tun)) {
-                    free(new_endpoint);
                     free(new_tun);
                     return -5;
                 }
