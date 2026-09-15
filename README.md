@@ -323,7 +323,24 @@ By this principle the virtual network can be expanded to more clients. The helpe
 
 # Encryption
 
-The app supports encryption. Any encryption is presented as encryption plugins. An encryption pluging is a special `.so` library with the specific external functions. More detailed about how to write a custom encryption plugin [here](https://github.com/MastMind/MineTunnel_xor_encryptor "xor encryption example"). The tunnels in encryption mode will be encrypted by plugin's algorythm (it means all packets will be encrypted). It supports only symmetric encryptions (asymetric will be available in future).  
+The app supports encryption. Any encryption is presented as encryption plugins. An encryption pluging is a special `.so` library with the specific external functions. More detailed about how to write a custom encryption plugin [here](https://github.com/MastMind/MineTunnel_xor_encryptor "xor encryption example"). The tunnels in encryption mode will be encrypted by plugin's algorythm (it means all packets will be encrypted). It supports only symmetric encryptions (asymetric will be available in future).
+
+## Officially supported plugins
+
+The following plugins are officially supported and published as standalone repositories (each repository contains the source code and a `README.md` with the exact `encryption_params` format):
+
+| Plugin (library file) | Algorithm | Repository |
+|---|---|---|
+| `xor_encrypt.so` | XOR stream cipher (demo, educational purpose) | [MineTunnel_xor_encryptor](https://github.com/MastMind/MineTunnel_xor_encryptor) |
+| `libmine_tunnel_aes_encryptor.so` | AES-128-CBC + PKCS7, optional AES-CMAC / HMAC-SHA256 integrity | [MineTunnel_aes_encryptor](https://github.com/MastMind/MineTunnel_aes_encryptor) |
+| `libmine_tunnel_chacha20_encryptor.so` | ChaCha20-Poly1305 (AEAD) | [MineTunnel_ChaCha20_encryptor](https://github.com/MastMind/MineTunnel_ChaCha20_encryptor) |
+| `libmine_tunnel_camellia_encryptor.so` | Camellia-128/192/256-CBC + PKCS7, optional CMAC / HMAC-SHA256 | [MineTunnel_camellia_encryptor](https://github.com/MastMind/MineTunnel_camellia_encryptor) |
+| `libmine_tunnel_compressor.so` | LZ4 or Snappy compression (data compression, not encryption) | [MineTunnel_compressor_encryptor](https://github.com/MastMind/MineTunnel_compressor_encryptor) |
+| `libmine_tunnel_kuznyechik_encryptor.so` | Kuznyechik-256-CBC (GOST R 34.12-2015) + PKCS7, optional CMAC / HMAC-SHA256 | [MineTunnel_GOST_encryptor](https://github.com/MastMind/MineTunnel_GOST_encryptor) |
+| `libmine_tunnel_magma_encryptor.so` | Magma-CBC (GOST, 64-bit block) + PKCS7, optional CMAC / HMAC-SHA256 | [MineTunnel_GOST_encryptor](https://github.com/MastMind/MineTunnel_GOST_encryptor) |
+
+On Windows the same plugin names have the `.dll` extension. The `encryption_params` JSON format of each plugin is described in the `README.md` of its repository.
+
 For adding encryption it requires to register an encryption plugin in general section at the first order:
 ```
 encryption_plugins : [
