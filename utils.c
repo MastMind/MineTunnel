@@ -9,12 +9,10 @@
 #include <unistd.h>
 #endif
 
-#include "list.h"
 #include "tunnel.h"
 #include "embed_interpreter.h"
 #include "task.h"
 #include "utils.h"
-#include "crc.h"
 
 
 
@@ -162,124 +160,14 @@ end:
 }
 
 /**
- * Hash function for tunnel entities
- * @param data Tunnel entity data
- * @return Hash value
+ * Build the byte-array key (IP + port) used by the hash tables
+ * @param ip IPv4 address value
+ * @param port Port number
+ * @param key Output buffer (at least IP_PORT_KEY_LEN bytes)
  */
-uint32_t tunnel_hash_func(void* data) {
-    tunnel_entity_t* tun = (tunnel_entity_t*)data;
-    unsigned char hs[IPV4_ADDR_LENGTH + PORT_LENGTH] = { 0 };
-    memcpy(hs, &tun->local_endpoint.value, IPV4_ADDR_LENGTH);
-    memcpy(hs + IPV4_ADDR_LENGTH, &tun->local_port, PORT_LENGTH);
-    return crc32_calc(hs, IPV4_ADDR_LENGTH + PORT_LENGTH);
-}
-
-/**
- * Comparison function for tunnel entities
- * @param arg1 First tunnel entity
- * @param arg2 Second tunnel entity
- * @return 0 if equal, non-zero otherwise
- */
-int tunnel_cmp_func(void* arg1, void* arg2) {
-    tunnel_entity_t* t1 = (tunnel_entity_t*)arg1;
-    tunnel_entity_t* t2 = (tunnel_entity_t*)arg2;
-    return (t1->local_endpoint.value == t2->local_endpoint.value &&
-            t1->local_port == t2->local_port) ? 0 : 1;
-}
-
-/**
- * Hash function for endpoints
- * @param data Endpoint data
- * @return Hash value
- */
-uint32_t endpoint_hash_func(void* data) {
-    bh_list_t* node = (bh_list_t*)data;
-    tunnel_endpoint_t* ep  = (tunnel_endpoint_t*)node->data;
-    unsigned char hs[IPV4_ADDR_LENGTH + PORT_LENGTH] = { 0 };
-    memcpy(hs, &ep->remote_endpoint.value, IPV4_ADDR_LENGTH);
-    memcpy(hs + IPV4_ADDR_LENGTH, &ep->remote_port, PORT_LENGTH);
-    return crc32_calc(hs, IPV4_ADDR_LENGTH + PORT_LENGTH);
-}
-
-/**
- * Comparison function for endpoints
- * @param arg1 First endpoint
- * @param arg2 Second endpoint
- * @return 0 if equal, non-zero otherwise
- */
-int endpoint_cmp_func(void* arg1, void* arg2) {
-    tunnel_endpoint_t* e1 = (tunnel_endpoint_t*)((bh_list_t*)arg1)->data;
-    tunnel_endpoint_t* e2 = (tunnel_endpoint_t*)((bh_list_t*)arg2)->data;
-    return (e1->remote_endpoint.value == e2->remote_endpoint.value &&
-            e1->remote_port == e2->remote_port) ? 0 : 1;
-}
-
-/**
- * Hash function for file descriptor to tunnel mappings
- * @param data Mapping data
- * @return Hash value
- */
-uint32_t tun_map_hash_func(void* data) {
-    return (uint32_t)((fd_tun_map_t*)data)->fd;
-}
-
-/**
- * Comparison function for file descriptor to tunnel mappings
- * @param arg1 First mapping
- * @param arg2 Second mapping
- * @return 0 if equal, non-zero otherwise
- */
-int tun_map_cmp_func(void* arg1, void* arg2) {
-    return (((fd_tun_map_t*)arg1)->fd == ((fd_tun_map_t*)arg2)->fd) ? 0 : 1;
-}
-
-/**
- * Hash function for encryptors
- * @param data Encryptor data
- * @return Hash value
- */
-uint32_t encryptor_hash_func(void* data) {
-    enc_entinty_t* enc = (enc_entinty_t*)data;
-    return crc32_calc((unsigned char*)enc->name, (uint32_t)strlen(enc->name));
-}
-
-/**
- * Comparison function for encryptors
- * @param arg1 First encryptor
- * @param arg2 Second encryptor
- * @return 0 if equal, non-zero otherwise
- */
-int encryptor_cmp_func(void* arg1, void* arg2) {
-    return strncmp(((enc_entinty_t*)arg1)->name,
-                   ((enc_entinty_t*)arg2)->name, MAX_ENCRYPTOR_NAME);
-}
-
-/**
- * Hash function for tunnel cache entries
- * @param data Cache entry data
- * @return Hash value
- */
-uint32_t tun_cache_hash_func(void* data) {
-    tun_cache_t* c = (tun_cache_t*)data;
-    unsigned char hs[IPV4_ADDR_LENGTH + MAC_ADDR_LENGTH + IPV6_ADDR_LENGTH] = { 0 };
-    memcpy(hs, &c->ip.value, IPV4_ADDR_LENGTH);
-    memcpy(hs + IPV4_ADDR_LENGTH, c->mac.addr, MAC_ADDR_LENGTH);
-    memcpy(hs + IPV4_ADDR_LENGTH + MAC_ADDR_LENGTH, c->ip6.addr, IPV6_ADDR_LENGTH);
-    return crc32_calc(hs, IPV4_ADDR_LENGTH + MAC_ADDR_LENGTH + IPV6_ADDR_LENGTH);
-}
-
-/**
- * Comparison function for tunnel cache entries
- * @param arg1 First cache entry
- * @param arg2 Second cache entry
- * @return 0 if equal, non-zero otherwise
- */
-int tun_cache_cmp_func(void* arg1, void* arg2) {
-    tun_cache_t* c1 = (tun_cache_t*)arg1;
-    tun_cache_t* c2 = (tun_cache_t*)arg2;
-    return (c1->ip.value == c2->ip.value &&
-            !memcmp(c1->mac.addr, c2->mac.addr, MAC_ADDR_LENGTH) &&
-            !memcmp(c1->ip6.addr, c2->ip6.addr, IPV6_ADDR_LENGTH)) ? 0 : 1;
+void ip_port_key(uint32_t ip, uint16_t port, unsigned char* key) {
+    memcpy(key, &ip, IPV4_ADDR_LENGTH);
+    memcpy(key + IPV4_ADDR_LENGTH, &port, PORT_LENGTH);
 }
 
 /**

@@ -4,9 +4,7 @@
 #include "json.h"
 #include "utils.h"
 #include "defines.h"
-#include "hash_table.h"
-#include "list.h"
-#include "deque.h"
+#include "ht.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -352,6 +350,30 @@ static void conn_free(int idx) {
     MTX_UNLOCK(&g_lock);
 }
 
+//ht_foreach context + callback: append remote endpoints to the JSON array.
+typedef struct ep_json_ctx_s {
+    json_array_t remote;
+    int have_ep;
+} ep_json_ctx_t;
+
+static int endpoint_json_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    ep_json_ctx_t* ctx = (ep_json_ctx_t*)user;
+    tunnel_endpoint_t* ep = (tunnel_endpoint_t*)value;
+    if (ep) {
+        char ipbuf[32];
+        fmt_endpoint(ep, ipbuf, sizeof(ipbuf));
+        json_object_t eo = json_object_create();
+        json_object_add_string(eo, "ip", ipbuf);
+        json_object_add_string(eo, "dynamic",
+                               ep->is_dynamic ? "true" : "false");
+        json_array_add_object(ctx->remote, eo);
+        ctx->have_ep = 1;
+    }
+    return 0;
+}
+
 static void cmd_get_tunnels(sock_t s, int uid) {
     tunnel_entity_t* all[MAX_TUNNELS];
     int n = tunnel_collect_all(all, MAX_TUNNELS);
@@ -381,27 +403,13 @@ static void cmd_get_tunnels(sock_t s, int uid) {
         //Remote endpoints + link status (endpoints may be mutated by the
         //worker when dynamic endpoints are enabled -> lock).
         json_array_t remote = json_array_create();
-        int have_ep = 0;
 
         endp_lock(t->worker);
-        bh_list_t* it = t->remote_endpoint_list;
-        while (it) {
-            tunnel_endpoint_t* ep = (tunnel_endpoint_t*)it->data;
-            if (ep) {
-                char ipbuf[32];
-                fmt_endpoint(ep, ipbuf, sizeof(ipbuf));
-                json_object_t eo = json_object_create();
-                json_object_add_string(eo, "ip", ipbuf);
-                json_object_add_string(eo, "dynamic",
-                                       ep->is_dynamic ? "true" : "false");
-                json_array_add_object(remote, eo);
-                have_ep = 1;
-            }
-            it = it->next;
-        }
+        ep_json_ctx_t ep_ctx = { remote, 0 };
+        ht_foreach(t->remote_endpoint_ht, endpoint_json_cb, &ep_ctx);
         endp_unlock(t->worker);
 
-        json_object_add_string(to, "link", have_ep ? "up" : "down");
+        json_object_add_string(to, "link", ep_ctx.have_ep ? "up" : "down");
         json_object_add_array(to, "remote", remote);
 
         json_array_add_object(tunnels, to);
@@ -457,6 +465,40 @@ static void cmd_get_tunnels_addr(sock_t s, int uid, json_object_t req) {
     send_ok(s, uid, "tunnel_addr", data);
 }
 
+//ht_foreach context + callback: append cache entries to the JSON array.
+typedef struct cache_json_ctx_s {
+    json_array_t cache_arr;
+    int is_tap;
+} cache_json_ctx_t;
+
+static int cache_json_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    cache_json_ctx_t* ctx = (cache_json_ctx_t*)user;
+    tun_cache_t* c = (tun_cache_t*)value;
+    if (c) {
+        char ipv4[32], ipv6[64], mac[32], ttl[16];
+        if (ctx->is_tap) {
+            snprintf(ipv4, sizeof(ipv4), "0");
+            snprintf(ipv6, sizeof(ipv6), "0");
+            fmt_mac(&c->mac, mac, sizeof(mac));
+        } else {
+            fmt_ipv4(&c->ip, ipv4, sizeof(ipv4));
+            fmt_ipv6(&c->ip6, ipv6, sizeof(ipv6));
+            snprintf(mac, sizeof(mac), "0");
+        }
+        snprintf(ttl, sizeof(ttl), "%u", (unsigned)c->ttl);
+
+        json_object_t co = json_object_create();
+        json_object_add_string(co, "ipv4", ipv4);
+        json_object_add_string(co, "ipv6", ipv6);
+        json_object_add_string(co, "mac", mac);
+        json_object_add_string(co, "ttl", ttl);
+        json_array_add_object(ctx->cache_arr, co);
+    }
+    return 0;
+}
+
 //Append the cache entries of a tunnel into the given array (locked).
 static void collect_cache(tunnel_entity_t* t, json_array_t cache_arr) {
     worker_t* w = t->worker;
@@ -466,37 +508,27 @@ static void collect_cache(tunnel_entity_t* t, json_array_t cache_arr) {
     int is_tap = (t->tun_intf.mode == MODE_TAP);
 
     cache_lock(w);
-    bh_deque_t* dq = w->tun_cache_list;
-    while (dq) {
-        hash_table_t* node = (hash_table_t*)dq->data;
-        bh_list_t* il = node ? node->data : NULL;
-        while (il) {
-            tun_cache_t* c = (tun_cache_t*)il->data;
-            if (c) {
-                char ipv4[32], ipv6[64], mac[32], ttl[16];
-                if (is_tap) {
-                    snprintf(ipv4, sizeof(ipv4), "0");
-                    snprintf(ipv6, sizeof(ipv6), "0");
-                    fmt_mac(&c->mac, mac, sizeof(mac));
-                } else {
-                    fmt_ipv4(&c->ip, ipv4, sizeof(ipv4));
-                    fmt_ipv6(&c->ip6, ipv6, sizeof(ipv6));
-                    snprintf(mac, sizeof(mac), "0");
-                }
-                snprintf(ttl, sizeof(ttl), "%u", (unsigned)c->ttl);
-
-                json_object_t co = json_object_create();
-                json_object_add_string(co, "ipv4", ipv4);
-                json_object_add_string(co, "ipv6", ipv6);
-                json_object_add_string(co, "mac", mac);
-                json_object_add_string(co, "ttl", ttl);
-                json_array_add_object(cache_arr, co);
-            }
-            il = il->next;
-        }
-        dq = dq->next;
-    }
+    cache_json_ctx_t ctx = { cache_arr, is_tap };
+    ht_foreach(w->tun_cache_ht, cache_json_cb, &ctx);
     cache_unlock(w);
+}
+
+//ht_foreach context + callback: format the first endpoint (representative
+//VTEP) into the given buffer and stop the walk.
+typedef struct vtep_fmt_ctx_s {
+    char* buf;
+    size_t n;
+} vtep_fmt_ctx_t;
+
+static int first_endpoint_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    vtep_fmt_ctx_t* ctx = (vtep_fmt_ctx_t*)user;
+    tunnel_endpoint_t* ep = (tunnel_endpoint_t*)value;
+    if (ep) {
+        fmt_endpoint(ep, ctx->buf, ctx->n);
+    }
+    return 1;
 }
 
 static void cmd_get_tunnel_cache(sock_t s, int uid, json_object_t req) {
@@ -519,12 +551,8 @@ static void cmd_get_tunnel_cache(sock_t s, int uid, json_object_t req) {
         //representative VTEP: first known remote endpoint
         char vtep[32] = "0.0.0.0:0";
         endp_lock(t->worker);
-        if (t->remote_endpoint_list) {
-            tunnel_endpoint_t* ep = (tunnel_endpoint_t*)t->remote_endpoint_list->data;
-            if (ep) {
-                fmt_endpoint(ep, vtep, sizeof(vtep));
-            }
-        }
+        vtep_fmt_ctx_t vtep_ctx = { vtep, sizeof(vtep) };
+        ht_foreach(t->remote_endpoint_ht, first_endpoint_cb, &vtep_ctx);
         endp_unlock(t->worker);
 
         json_array_t cache_arr = json_array_create();
@@ -548,10 +576,8 @@ static void clear_one_cache(tunnel_entity_t* t) {
         return;
     }
     cache_lock(w);
-    hash_table_clear(&w->tun_cache_ht, free);
-    bhdeque_clear(w->tun_cache_list, NULL);
+    ht_free(w->tun_cache_ht, free);
     w->tun_cache_ht = NULL;
-    w->tun_cache_list = NULL;
     cache_unlock(w);
 }
 
