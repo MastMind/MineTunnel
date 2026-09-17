@@ -32,7 +32,6 @@
 #include "config.h"
 #include "tunnel.h"
 #include "task.h"
-#include "crc.h"
 #include "defines.h"
 #include "utils.h"
 #include "embed_interpreter.h"
@@ -49,9 +48,9 @@
 static options_t opts;
 static volatile sig_atomic_t sig_close = 0;
 static config_t cfg;
-static hash_table_t* tunnels_ht = NULL;
-static hash_table_t* sck_tun_ht = NULL;
-static hash_table_t* encryptors_ht = NULL;
+static ht_t* tunnels_ht = NULL;
+static ht_t* sck_tun_ht = NULL;
+static ht_t* encryptors_ht = NULL;
 
 static int tun_idx = 0;
 static int tap_idx = 0;
@@ -370,9 +369,9 @@ void tunnel_app_stop() {
     epoll_fd = 0;
 #endif
 
-    hash_table_clear(&sck_tun_ht, NULL);
-    hash_table_clear(&tunnels_ht, &tunnel_stop);
-    hash_table_clear(&encryptors_ht, &encryptor_release);
+    ht_free(sck_tun_ht, free);
+    ht_free(tunnels_ht, tunnel_stop);
+    ht_free(encryptors_ht, encryptor_release);
 
     // SetIngoreICMPEcho(0);
 
@@ -418,31 +417,30 @@ uint16_t tunnel_app_getControlPort() {
     return opts.control_port ? opts.control_port : CONTROL_DEFAULT_PORT;
 }
 
-/* Recursively walk the tunnels hash tree, collecting tunnel pointers. */
-static void tunnel_collect_walk(hash_table_t* node, tunnel_entity_t** out,
-                                int max_out, int* count) {
-    if (!node) {
-        return;
-    }
-    tunnel_collect_walk(node->left, out, max_out, count);
+struct collect_ctx {
+    tunnel_entity_t** out;
+    int max_out;
+    int count;
+};
 
-    bh_list_t* it = node->data;
-    while (it) {
-        if (*count < max_out) {
-            out[(*count)++] = (tunnel_entity_t*)it->data;
-        }
-        it = it->next;
-    }
+static int tunnel_collect_cb(const void* key, size_t key_len, void* value, void* user) {
+    struct collect_ctx* ctx = (struct collect_ctx*)user;
+    (void)key;
+    (void)key_len;
 
-    tunnel_collect_walk(node->right, out, max_out, count);
+    if (ctx->count >= ctx->max_out) {
+        return 1;
+    }
+    ctx->out[ctx->count++] = (tunnel_entity_t*)value;
+    return 0;
 }
 
 int tunnel_collect_all(tunnel_entity_t** out, int max_out) {
-    int count = 0;
+    struct collect_ctx ctx = { out, max_out, 0 };
     if (out && max_out > 0) {
-        tunnel_collect_walk(tunnels_ht, out, max_out, &count);
+        ht_foreach(tunnels_ht, tunnel_collect_cb, &ctx);
     }
-    return count;
+    return ctx.count;
 }
 
 tunnel_entity_t* tunnel_find_by_name(const char* name) {
@@ -564,13 +562,20 @@ static int add_tun_map(int fd, tunnel_entity_t* tun) {
     tun_map->fd = fd;
     tun_map->tun = tun;
 
-    if (hash_table_find(&sck_tun_ht, tun_map, &tun_map_hash_func, &tun_map_cmp_func)) {
+    if (!sck_tun_ht) {
+        sck_tun_ht = ht_create();
+        if (!sck_tun_ht) {
+            PrintError("Internal error. Can't alloc memory for tunnel map table\n");
+            free(tun_map);
+            return -1;
+        }
+    }
+
+    if (ht_add(sck_tun_ht, (const void*)&tun_map->fd, sizeof(int), tun_map) != HT_OK) {
         PrintError("Found duplicate for tunnel map: fd %d\n", fd);
         free(tun_map);
         return -3;
     }
-
-    hash_table_add(&sck_tun_ht, tun_map, &tun_map_hash_func);
 
 #ifdef DEBUG
     fprintf(stdout, "Added tunmap with fd %d\n", fd);
@@ -617,7 +622,20 @@ static int load_encryptors(config_t* cfg) {
         LOAD_SYM(create_instance, "create_instance")
         LOAD_SYM(destroy_instance, "destroy_instance")
 
-        hash_table_add(&encryptors_ht, encryptor, &encryptor_hash_func);
+        if (!encryptors_ht) {
+            encryptors_ht = ht_create();
+            if (!encryptors_ht) {
+                PrintError("Internal error. Can't alloc memory for encryptors table\n");
+                ret = -1;
+                goto err;
+            }
+        }
+
+        if (ht_add(encryptors_ht, encryptor->name, strlen(encryptor->name), encryptor) != HT_OK) {
+            PrintError("Can't add encryptor %s to table\n", encryptor->name);
+            ret = -2;
+            goto err;
+        }
 
         PrintInform("Encryptor loaded: %s (%s)\n", encryptor->name, tun_encryptor->module_path);
 
@@ -1037,13 +1055,8 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
             goto err_label;
         }
 
-        fd_tun_map_t key = {
-            .fd = (int)intf->raw_socket_in,
-            .tun = tun
-        };
-
-        fd_tun_map_t* map = (fd_tun_map_t*)hash_table_find(
-            &sck_tun_ht, &key, &tun_map_hash_func, &tun_map_cmp_func);
+        fd_tun_map_t* map = (fd_tun_map_t*)ht_get(
+            sck_tun_ht, &sock_fd, sizeof(int));
 
         iocp_ctx_t* ctx = (iocp_ctx_t*)malloc(sizeof(iocp_ctx_t));
         if (!ctx) {
@@ -1095,14 +1108,9 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
         }
 
 #ifdef _WIN32
-        if (intf->wintun_ctx) {
-            fd_tun_map_t  key = {
-                .fd = tun_fd_key,
-                .tun = tun
-            };
-
-            fd_tun_map_t* map = (fd_tun_map_t*)hash_table_find(
-                &sck_tun_ht, &key, &tun_map_hash_func, &tun_map_cmp_func);
+         if (intf->wintun_ctx) {
+            fd_tun_map_t* map = (fd_tun_map_t*)ht_get(
+                sck_tun_ht, &tun_fd_key, sizeof(int));
 
             wintun_reader_ctx_t* rctx =
                 (wintun_reader_ctx_t*)malloc(sizeof(wintun_reader_ctx_t));
@@ -1135,7 +1143,7 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
                 err = -32;
                 goto err_label;
             }
-        } else {
+         } else {
             if (CreateIoCompletionPort(intf->tun_fd, iocp_handle, 0, 0) == NULL) {
                 PrintError("CreateIoCompletionPort (TAP) failed. Code: %lu\n",
                            GetLastError());
@@ -1143,13 +1151,8 @@ static int init_tun_intf(tunnel_entity_t* tun, tun_info_t* tun_info) {
                 goto err_label;
             }
 
-            fd_tun_map_t  key = {
-                .fd = tun_fd_key,
-                .tun = tun
-            };
-
-            fd_tun_map_t* map = (fd_tun_map_t*)hash_table_find(
-                &sck_tun_ht, &key, &tun_map_hash_func, &tun_map_cmp_func);
+            fd_tun_map_t* map = (fd_tun_map_t*)ht_get(
+                sck_tun_ht, &tun_fd_key, sizeof(int));
 
             iocp_ctx_t* ctx = (iocp_ctx_t*)malloc(sizeof(iocp_ctx_t));
             if (!ctx) {
@@ -1296,19 +1299,16 @@ static int build_tunnels(config_t* cfg) {
 
         //optional encryptor
         if (*tun_info->encryptor_name != '\0') {
-            enc_entinty_t search_entity;
-            memset(&search_entity, 0, sizeof(enc_entinty_t));
-            strncpy(search_entity.name, tun_info->encryptor_name, MAX_ENCRYPTOR_NAME - 1);
-
-            enc_entinty_t* found_enc = (enc_entinty_t*)hash_table_find(
-                &encryptors_ht, &search_entity, &encryptor_hash_func, &encryptor_cmp_func);
+            enc_entinty_t* found_enc = (enc_entinty_t*)ht_get(
+                encryptors_ht, tun_info->encryptor_name,
+                strlen(tun_info->encryptor_name));
 
             if (!found_enc) {
-                PrintError("Can't find encryptor %s\n", search_entity.name);
+                PrintError("Can't find encryptor %s\n", tun_info->encryptor_name);
             } else {
                 void* inst = found_enc->create_instance(tun_info->encryption_params);
                 if (!inst) {
-                    PrintError("Can't create encryptor instance for %s\n", search_entity.name);
+                    PrintError("Can't create encryptor instance for %s\n", tun_info->encryptor_name);
                 } else {
                     tun.encryptor = found_enc;
                     tun.encryptor_instance = inst;
@@ -1316,8 +1316,9 @@ static int build_tunnels(config_t* cfg) {
             }
         }
 
-        found_tun = (tunnel_entity_t*)hash_table_find(
-            &tunnels_ht, &tun, &tunnel_hash_func, &tunnel_cmp_func);
+        unsigned char tun_key[IP_PORT_KEY_LEN];
+        ip_port_key(tun.local_endpoint.value, tun.local_port, tun_key);
+        found_tun = (tunnel_entity_t*)ht_get(tunnels_ht, tun_key, sizeof(tun_key));
 
         if (found_tun) {
             if (found_tun->tun_intf.proto != tun_info->proto ||
@@ -1334,9 +1335,18 @@ static int build_tunnels(config_t* cfg) {
                 found_tun->dynamic_endpoints = 1;
                 PrintInform("Added dynamic endpoint to tunnel %s\n", found_tun->tun_intf.tun_name);
             } else {
-                bhlist_push_front(&found_tun->remote_endpoint_list, new_endpoint);
-                hash_table_add(&found_tun->remote_endpoint_ht,
-                               found_tun->remote_endpoint_list, &endpoint_hash_func);
+                if (!found_tun->remote_endpoint_ht) {
+                    found_tun->remote_endpoint_ht = ht_create();
+                    if (!found_tun->remote_endpoint_ht) {
+                        PrintError("Internal error. Can't alloc memory for endpoint table\n");
+                        free(new_endpoint);
+                        return -2;
+                    }
+                }
+
+                unsigned char ep_key[IP_PORT_KEY_LEN];
+                ip_port_key(new_endpoint->remote_endpoint.value, new_endpoint->remote_port, ep_key);
+                ht_add(found_tun->remote_endpoint_ht, ep_key, sizeof(ep_key), new_endpoint);
                 PrintInform("Added VTEP %u.%u.%u.%u:%u to tunnel %s\n",
                            new_endpoint->remote_endpoint.addr[0],
                            new_endpoint->remote_endpoint.addr[1],
@@ -1369,13 +1379,20 @@ static int build_tunnels(config_t* cfg) {
             strncpy(new_tun->shutdown_embed, tun.shutdown_embed, sizeof(new_tun->shutdown_embed) - 1);
             new_tun->shutdown_embed[sizeof(new_tun->shutdown_embed) - 1] = '\0';
             new_tun->remote_endpoint_ht = NULL;
-            new_tun->remote_endpoint_list = NULL;
             new_tun->worker = NULL;
 
             if (new_endpoint->remote_endpoint.value) {
-                bhlist_push_front(&new_tun->remote_endpoint_list, new_endpoint);
-                hash_table_add(&new_tun->remote_endpoint_ht,
-                               new_tun->remote_endpoint_list, &endpoint_hash_func);
+                new_tun->remote_endpoint_ht = ht_create();
+                if (!new_tun->remote_endpoint_ht) {
+                    PrintError("Internal error. Can't alloc memory for endpoint table\n");
+                    free(new_endpoint);
+                    free(new_tun);
+                    return -3;
+                }
+
+                unsigned char ep_key[IP_PORT_KEY_LEN];
+                ip_port_key(new_endpoint->remote_endpoint.value, new_endpoint->remote_port, ep_key);
+                ht_add(new_tun->remote_endpoint_ht, ep_key, sizeof(ep_key), new_endpoint);
             }
 
             if (init_tun_intf(new_tun, tun_info)) {
@@ -1395,7 +1412,22 @@ static int build_tunnels(config_t* cfg) {
                 ExecScript(new_tun->bringup_script);
             }
 
-            hash_table_add(&tunnels_ht, new_tun, &tunnel_hash_func);
+            if (!tunnels_ht) {
+                tunnels_ht = ht_create();
+                if (!tunnels_ht) {
+                    PrintError("Internal error. Can't alloc memory for tunnels table\n");
+                    tunnel_stop(new_tun);
+                    return -3;
+                }
+            }
+
+            unsigned char new_tun_key[IP_PORT_KEY_LEN];
+            ip_port_key(new_tun->local_endpoint.value, new_tun->local_port, new_tun_key);
+            if (ht_add(tunnels_ht, new_tun_key, sizeof(new_tun_key), new_tun) != HT_OK) {
+                PrintError("Internal error. Can't add tunnel to table\n");
+                tunnel_stop(new_tun);
+                return -3;
+            }
 
             PrintInform("Tunnel created: %s (%s/%s, %u.%u.%u.%u -> %u.%u.%u.%u)\n",
                        new_tun->tun_intf.tun_name,
@@ -1462,12 +1494,10 @@ static int tunnel_poll(void) {
                 continue;
             }
 
-            fd_tun_map_t  tmp_tun = {
-                .fd = evlist[i].data.fd
-            };
+            int poll_fd = evlist[i].data.fd;
 
-            fd_tun_map_t* found_map = (fd_tun_map_t*)hash_table_find(
-                &sck_tun_ht, &tmp_tun, &tun_map_hash_func, &tun_map_cmp_func);
+            fd_tun_map_t* found_map = (fd_tun_map_t*)ht_get(
+                sck_tun_ht, &poll_fd, sizeof(int));
 
             if (!found_map) {
                 continue;
@@ -1544,8 +1574,8 @@ static void tunnel_stop(void* arg) {
         ExecScript(tun->shutdown_script);
     }
 
-    bhlist_clear(tun->remote_endpoint_list, NULL);
-    hash_table_clear(&tun->remote_endpoint_ht, NULL);
+    ht_free(tun->remote_endpoint_ht, free);
+    tun->remote_endpoint_ht = NULL;
 
 #ifdef _WIN32
     if (tun->tun_intf.raw_socket_in  && tun->tun_intf.raw_socket_in  != INVALID_SOCKET) {
@@ -1587,7 +1617,7 @@ static void tunnel_stop(void* arg) {
     free(tun);
 }
 
-static void encryptor_release(void* arg) {
+  static void encryptor_release(void* arg) {
     enc_entinty_t* encryptor = (enc_entinty_t*)arg;
 
     if (encryptor->shared_library_handle) {
@@ -1597,6 +1627,8 @@ static void encryptor_release(void* arg) {
         dlclose(encryptor->shared_library_handle);
 #endif
     }
+
+    free(encryptor);
 }
 
 #ifdef _WIN32

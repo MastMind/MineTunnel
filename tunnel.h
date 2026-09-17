@@ -12,8 +12,7 @@
 #include <limits.h>
 
 #include "task.h"
-#include "hash_table.h"
-#include "list.h"
+#include "ht.h"
 #include "defines.h"
 
 
@@ -61,8 +60,7 @@ typedef struct tunnel_entity_s {
     ipv4_addr local_endpoint;
     uint16_t local_port;
     uint16_t icmp_identifier;
-    hash_table_t* remote_endpoint_ht;
-    bh_list_t* remote_endpoint_list;
+    ht_t* remote_endpoint_ht;
     int dynamic_endpoints;
     tun_intf_t tun_intf;
     char bringup_script[PATH_MAX];

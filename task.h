@@ -9,9 +9,7 @@
 #include <pthread.h>
 #endif
 
-#include "hash_table.h"
-#include "list.h"
-#include "deque.h"
+#include "ht.h"
 #include "defines.h"
 #include "utils.h"
 
@@ -57,8 +55,7 @@ typedef struct worker_s {
     task_t*              task_buf;
     uint16_t            new_task_idx;
     uint16_t            cur_task_idx;
-    hash_table_t*       tun_cache_ht;
-    bh_deque_t*         tun_cache_list;
+    ht_t*               tun_cache_ht;
     int                 dyn_endpoints_enabled;
     struct tunnel_entity_s* current_tun;
 #ifdef _WIN32
@@ -71,11 +68,11 @@ typedef struct worker_s {
 #endif
 } worker_t;
 
-typedef struct tun_cache_s {
+ typedef struct tun_cache_s {
     ipv4_addr ip;
     ipv6_addr ip6;
     mac_addr mac;
-    bh_list_t* endpoint_list;
+    tunnel_endpoint_t* endpoint;
     uint16_t ttl;
 } tun_cache_t;
 

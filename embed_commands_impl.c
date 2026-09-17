@@ -25,6 +25,7 @@
 #include "embed_commands_impl.h"
 #include "defines.h"
 #include "utils.h"
+#include "ht.h"
 
 
 
@@ -38,6 +39,404 @@ static int create_netlink_socket();
 static int netlink_send_recv(int sock, struct nlmsghdr *msg, size_t msg_len,
                             char *response, size_t response_len);
 #endif
+
+#ifdef _WIN32
+static int win_pin_vtep_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    (void)user;
+    tunnel_endpoint_t *ep = (tunnel_endpoint_t *)value;
+    if (ep && ep->remote_endpoint.value) {
+        win_pin_vtep_route(&ep->remote_endpoint);
+    }
+    return 0;
+}
+
+static int win_unpin_vtep_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    (void)user;
+    tunnel_endpoint_t *ep = (tunnel_endpoint_t *)value;
+    if (ep && ep->remote_endpoint.value) {
+        win_unpin_vtep_route(&ep->remote_endpoint);
+    }
+    return 0;
+}
+#endif
+
+#ifndef _WIN32
+static int vtep_route_add_ipv4_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    int sock = *(int*)user;
+    tunnel_endpoint_t* cur_remote_endpoint = (tunnel_endpoint_t*)value;
+
+    // Query existing route to find the gateway for this VTEP
+    struct {
+        struct nlmsghdr nlh;
+        struct rtmsg    rtm;
+        char buf[RTA_LENGTH(4)];
+    } get_request;
+
+    memset(&get_request, 0, sizeof(get_request));
+    get_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
+    get_request.nlh.nlmsg_flags = NLM_F_REQUEST;
+    get_request.nlh.nlmsg_type  = RTM_GETROUTE;
+    get_request.nlh.nlmsg_seq   = 1;
+    get_request.nlh.nlmsg_pid   = getpid();
+
+    get_request.rtm.rtm_family   = AF_INET;
+    get_request.rtm.rtm_dst_len  = 32;
+    get_request.rtm.rtm_src_len  = 0;
+    get_request.rtm.rtm_tos      = 0;
+    get_request.rtm.rtm_table    = RT_TABLE_MAIN;
+    get_request.rtm.rtm_protocol = RTPROT_UNSPEC;
+    get_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
+    get_request.rtm.rtm_type     = RTN_UNSPEC;
+
+    // Add RTA_DST attribute (VTEP IP)
+    struct rtattr *rta = (struct rtattr *)((char *)&get_request +
+                          NLMSG_ALIGN(get_request.nlh.nlmsg_len));
+    rta->rta_type = RTA_DST;
+    rta->rta_len  = RTA_LENGTH(4);
+    memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 4);
+    get_request.nlh.nlmsg_len = NLMSG_ALIGN(get_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(rta->rta_len);
+
+    char response[4096];
+    int ret = netlink_send_recv(sock, &get_request.nlh, get_request.nlh.nlmsg_len,
+                                response, sizeof(response));
+    if (ret < 0) {
+        PrintError("Failed to query route for VTEP %u.%u.%u.%u\n",
+                  cur_remote_endpoint->remote_endpoint.addr[0],
+                  cur_remote_endpoint->remote_endpoint.addr[1],
+                  cur_remote_endpoint->remote_endpoint.addr[2],
+                  cur_remote_endpoint->remote_endpoint.addr[3]);
+        return 0;
+    }
+
+    // Parse response to find gateway
+    uint32_t vtep_gateway = 0;
+    struct nlmsghdr *resp = (struct nlmsghdr *)response;
+    int resp_len = ret;
+    for (; NLMSG_OK(resp, (unsigned int)resp_len);
+           resp = NLMSG_NEXT(resp, resp_len))
+    {
+        if (resp->nlmsg_type != RTM_NEWROUTE)
+            continue;
+
+        struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(resp);
+        if (rtm->rtm_family != AF_INET)
+            continue;
+
+        struct rtattr *attr = RTM_RTA(rtm);
+        int attr_len = RTM_PAYLOAD(resp);
+        for (; RTA_OK(attr, attr_len); attr = RTA_NEXT(attr, attr_len)) {
+            if (attr->rta_type == RTA_GATEWAY) {
+                vtep_gateway = *(uint32_t *)RTA_DATA(attr);
+            }
+        }
+    }
+
+    if (vtep_gateway == 0) {
+        PrintError("No route found for VTEP %u.%u.%u.%u\n",
+                  cur_remote_endpoint->remote_endpoint.addr[0],
+                  cur_remote_endpoint->remote_endpoint.addr[1],
+                  cur_remote_endpoint->remote_endpoint.addr[2],
+                  cur_remote_endpoint->remote_endpoint.addr[3]);
+        return 0;
+    }
+
+    // Create route: ip route add <vtep_ip>/32 via <vtep_gateway>
+    struct {
+        struct nlmsghdr nlh;
+        struct rtmsg    rtm;
+        char buf[1024];
+    } add_request;
+
+    memset(&add_request, 0, sizeof(add_request));
+    add_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
+    add_request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_REPLACE | NLM_F_ACK;
+    add_request.nlh.nlmsg_type  = RTM_NEWROUTE;
+    add_request.nlh.nlmsg_seq   = 1;
+    add_request.nlh.nlmsg_pid   = getpid();
+
+    add_request.rtm.rtm_family   = AF_INET;
+    add_request.rtm.rtm_dst_len  = 32;
+    add_request.rtm.rtm_src_len  = 0;
+    add_request.rtm.rtm_tos      = 0;
+    add_request.rtm.rtm_table    = RT_TABLE_MAIN;
+    add_request.rtm.rtm_protocol = RTPROT_STATIC;
+    add_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
+    add_request.rtm.rtm_type     = RTN_UNICAST;
+    add_request.rtm.rtm_flags    = 0;
+
+    rta = (struct rtattr *)((char *)&add_request +
+           NLMSG_ALIGN(add_request.nlh.nlmsg_len));
+    rta->rta_type = RTA_DST;
+    rta->rta_len  = RTA_LENGTH(4);
+    memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 4);
+    add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(rta->rta_len);
+
+    rta = (struct rtattr *)((char *)&add_request +
+           NLMSG_ALIGN(add_request.nlh.nlmsg_len));
+    rta->rta_type = RTA_GATEWAY;
+    rta->rta_len  = RTA_LENGTH(4);
+    memcpy(RTA_DATA(rta), &vtep_gateway, 4);
+    add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(rta->rta_len);
+
+    char add_response[4096];
+    ret = netlink_send_recv(sock, &add_request.nlh, add_request.nlh.nlmsg_len,
+                            add_response, sizeof(add_response));
+    if (ret < 0) {
+        PrintError("Failed to add route to VTEP %u.%u.%u.%u\n",
+                  cur_remote_endpoint->remote_endpoint.addr[0],
+                  cur_remote_endpoint->remote_endpoint.addr[1],
+                  cur_remote_endpoint->remote_endpoint.addr[2],
+                  cur_remote_endpoint->remote_endpoint.addr[3]);
+        return 0;
+    }
+
+    struct nlmsghdr *add_resp = (struct nlmsghdr *)add_response;
+    if (add_resp->nlmsg_type == NLMSG_ERROR) {
+        struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(add_resp);
+        if (err->error) {
+            PrintError("Failed to add route to VTEP %u.%u.%u.%u: %s\n",
+                      cur_remote_endpoint->remote_endpoint.addr[0],
+                      cur_remote_endpoint->remote_endpoint.addr[1],
+                      cur_remote_endpoint->remote_endpoint.addr[2],
+                      cur_remote_endpoint->remote_endpoint.addr[3],
+                      strerror(-err->error));
+            return 0;
+        }
+    }
+
+    PrintInform("Added route to VTEP %u.%u.%u.%u via %u.%u.%u.%u\n",
+                cur_remote_endpoint->remote_endpoint.addr[0],
+                cur_remote_endpoint->remote_endpoint.addr[1],
+                cur_remote_endpoint->remote_endpoint.addr[2],
+                cur_remote_endpoint->remote_endpoint.addr[3],
+                ((uint8_t *)&vtep_gateway)[0],
+                ((uint8_t *)&vtep_gateway)[1],
+                ((uint8_t *)&vtep_gateway)[2],
+                ((uint8_t *)&vtep_gateway)[3]);
+
+    return 0;
+}
+
+static int vtep_route_add_ipv6_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    int sock = *(int*)user;
+    tunnel_endpoint_t* cur_remote_endpoint = (tunnel_endpoint_t*)value;
+
+    // Query existing route to find the gateway for this VTEP
+    struct {
+        struct nlmsghdr nlh;
+        struct rtmsg    rtm;
+        char buf[RTA_LENGTH(16)];
+    } get_request;
+
+    memset(&get_request, 0, sizeof(get_request));
+    get_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
+    get_request.nlh.nlmsg_flags = NLM_F_REQUEST;
+    get_request.nlh.nlmsg_type  = RTM_GETROUTE;
+    get_request.nlh.nlmsg_seq   = 1;
+    get_request.nlh.nlmsg_pid   = getpid();
+
+    get_request.rtm.rtm_family   = AF_INET6;
+    get_request.rtm.rtm_dst_len  = 128;
+    get_request.rtm.rtm_src_len  = 0;
+    get_request.rtm.rtm_tos      = 0;
+    get_request.rtm.rtm_table    = RT_TABLE_MAIN;
+    get_request.rtm.rtm_protocol = RTPROT_UNSPEC;
+    get_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
+    get_request.rtm.rtm_type     = RTN_UNSPEC;
+
+    // Add RTA_DST attribute (VTEP IP)
+    struct rtattr *rta = (struct rtattr *)((char *)&get_request +
+                          NLMSG_ALIGN(get_request.nlh.nlmsg_len));
+    rta->rta_type = RTA_DST;
+    rta->rta_len  = RTA_LENGTH(16);
+    memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 16);
+    get_request.nlh.nlmsg_len = NLMSG_ALIGN(get_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(rta->rta_len);
+
+    char response[4096];
+    int ret = netlink_send_recv(sock, &get_request.nlh, get_request.nlh.nlmsg_len,
+                                response, sizeof(response));
+    if (ret < 0) {
+        PrintError("Failed to query route for VTEP\n");
+        return 0;
+    }
+
+    // Parse response to find gateway
+    struct in6_addr vtep_gateway = {0};
+    struct nlmsghdr *resp = (struct nlmsghdr *)response;
+    int resp_len = ret;
+    for (; NLMSG_OK(resp, (unsigned int)resp_len);
+           resp = NLMSG_NEXT(resp, resp_len))
+    {
+        if (resp->nlmsg_type != RTM_NEWROUTE)
+            continue;
+
+        struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(resp);
+        if (rtm->rtm_family != AF_INET6)
+            continue;
+
+        struct rtattr *attr = RTM_RTA(rtm);
+        int attr_len = RTM_PAYLOAD(resp);
+        for (; RTA_OK(attr, attr_len); attr = RTA_NEXT(attr, attr_len)) {
+            if (attr->rta_type == RTA_GATEWAY) {
+                memcpy(&vtep_gateway, RTA_DATA(attr), 16);
+            }
+        }
+    }
+
+    if (memcmp(&vtep_gateway, &((struct in6_addr){0}), 16) == 0) {
+        PrintError("No route found for VTEP\n");
+        return 0;
+    }
+
+    // Create route: ip6 route add <vtep_ip>/128 via <vtep_gateway>
+    struct {
+        struct nlmsghdr nlh;
+        struct rtmsg    rtm;
+        char buf[1024];
+    } add_request;
+
+    memset(&add_request, 0, sizeof(add_request));
+    add_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
+    add_request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_REPLACE | NLM_F_ACK;
+    add_request.nlh.nlmsg_type  = RTM_NEWROUTE;
+    add_request.nlh.nlmsg_seq   = 1;
+    add_request.nlh.nlmsg_pid   = getpid();
+
+    add_request.rtm.rtm_family   = AF_INET6;
+    add_request.rtm.rtm_dst_len  = 128;
+    add_request.rtm.rtm_src_len  = 0;
+    add_request.rtm.rtm_tos      = 0;
+    add_request.rtm.rtm_table    = RT_TABLE_MAIN;
+    add_request.rtm.rtm_protocol = RTPROT_STATIC;
+    add_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
+    add_request.rtm.rtm_type     = RTN_UNICAST;
+    add_request.rtm.rtm_flags    = 0;
+
+    rta = (struct rtattr *)((char *)&add_request +
+           NLMSG_ALIGN(add_request.nlh.nlmsg_len));
+    rta->rta_type = RTA_DST;
+    rta->rta_len  = RTA_LENGTH(16);
+    memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 16);
+    add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(rta->rta_len);
+
+    rta = (struct rtattr *)((char *)&add_request +
+           NLMSG_ALIGN(add_request.nlh.nlmsg_len));
+    rta->rta_type = RTA_GATEWAY;
+    rta->rta_len  = RTA_LENGTH(16);
+    memcpy(RTA_DATA(rta), &vtep_gateway, 16);
+    add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(rta->rta_len);
+
+    char add_response[4096];
+    ret = netlink_send_recv(sock, &add_request.nlh, add_request.nlh.nlmsg_len,
+                            add_response, sizeof(add_response));
+    if (ret < 0) {
+        PrintError("Failed to add route to VTEP\n");
+        return 0;
+    }
+
+    struct nlmsghdr *add_resp = (struct nlmsghdr *)add_response;
+    if (add_resp->nlmsg_type == NLMSG_ERROR) {
+        struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(add_resp);
+        if (err->error) {
+            PrintError("Failed to add route to VTEP: %s\n",
+                      strerror(-err->error));
+            return 0;
+        }
+    }
+
+    PrintInform("Added route to VTEP via gateway\n");
+
+    return 0;
+}
+
+static int vtep_route_del_ipv4_cb(const void* key, size_t key_len, void* value, void* user) {
+    (void)key;
+    (void)key_len;
+    int sock = *(int*)user;
+    int ret;
+    tunnel_endpoint_t* cur_remote_endpoint = (tunnel_endpoint_t*)value;
+
+    struct {
+        struct nlmsghdr nlh;
+        struct rtmsg    rtm;
+        char buf[1024];
+    } del_request;
+
+    memset(&del_request, 0, sizeof(del_request));
+    del_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
+    del_request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+    del_request.nlh.nlmsg_type  = RTM_DELROUTE;
+    del_request.nlh.nlmsg_seq   = 1;
+    del_request.nlh.nlmsg_pid   = getpid();
+
+    del_request.rtm.rtm_family   = AF_INET;
+    del_request.rtm.rtm_dst_len  = 32;
+    del_request.rtm.rtm_src_len  = 0;
+    del_request.rtm.rtm_tos      = 0;
+    del_request.rtm.rtm_table    = RT_TABLE_MAIN;
+    del_request.rtm.rtm_protocol = RTPROT_STATIC;
+    del_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
+    del_request.rtm.rtm_type     = RTN_UNICAST;
+    del_request.rtm.rtm_flags    = 0;
+
+    struct rtattr *del_rta = (struct rtattr *)((char *)&del_request +
+                              NLMSG_ALIGN(del_request.nlh.nlmsg_len));
+    del_rta->rta_type = RTA_DST;
+    del_rta->rta_len  = RTA_LENGTH(4);
+    memcpy(RTA_DATA(del_rta), &cur_remote_endpoint->remote_endpoint.value, 4);
+    del_request.nlh.nlmsg_len = NLMSG_ALIGN(del_request.nlh.nlmsg_len) +
+                                RTA_ALIGN(del_rta->rta_len);
+
+    char del_response[4096];
+    ret = netlink_send_recv(sock, &del_request.nlh, del_request.nlh.nlmsg_len,
+                            del_response, sizeof(del_response));
+    if (ret < 0) {
+        PrintError("Failed to delete route for VTEP %u.%u.%u.%u\n",
+                  cur_remote_endpoint->remote_endpoint.addr[0],
+                  cur_remote_endpoint->remote_endpoint.addr[1],
+                  cur_remote_endpoint->remote_endpoint.addr[2],
+                  cur_remote_endpoint->remote_endpoint.addr[3]);
+        return 0;
+    }
+
+    struct nlmsghdr *del_resp = (struct nlmsghdr *)del_response;
+    if (del_resp->nlmsg_type == NLMSG_ERROR) {
+        struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(del_resp);
+        if (err->error) {
+            PrintError("Failed to delete route for VTEP %u.%u.%u.%u: %s\n",
+                      cur_remote_endpoint->remote_endpoint.addr[0],
+                      cur_remote_endpoint->remote_endpoint.addr[1],
+                      cur_remote_endpoint->remote_endpoint.addr[2],
+                      cur_remote_endpoint->remote_endpoint.addr[3],
+                      strerror(-err->error));
+            return 0;
+        }
+    }
+
+    PrintInform("Deleted route for VTEP %u.%u.%u.%u\n",
+                cur_remote_endpoint->remote_endpoint.addr[0],
+                cur_remote_endpoint->remote_endpoint.addr[1],
+                cur_remote_endpoint->remote_endpoint.addr[2],
+                cur_remote_endpoint->remote_endpoint.addr[3]);
+
+    return 0;
+}
+#endif
+
 
 /**
  * Link interface command
@@ -582,16 +981,7 @@ int cmd_route_ipv4_add(CMD_ARGS) {
      *    BEFORE installing the tunnel route, so that the encapsulated traffic
      *    addressed to the VTEP itself is not black-holed by the new route.
      *    Mirrors the Linux netlink logic (RTM_GETROUTE -> add <vtep>/32). */
-    if (tun->remote_endpoint_list) {
-        bh_list_t *ep_it = tun->remote_endpoint_list;
-        while (ep_it) {
-            tunnel_endpoint_t *ep = (tunnel_endpoint_t *)ep_it->data;
-            if (ep && ep->remote_endpoint.value) {
-                win_pin_vtep_route(&ep->remote_endpoint);
-            }
-            ep_it = ep_it->next;
-        }
-    }
+    ht_foreach(tun->remote_endpoint_ht, win_pin_vtep_cb, NULL);
 
     /* 2. Install the tunnel route specified in the command. */
     MIB_IPFORWARD_ROW2 row;
@@ -645,172 +1035,8 @@ int cmd_route_ipv4_add(CMD_ARGS) {
         return -1;
     }
 
-    // 1. Add routes to each VTEP from remote_endpoint_list
-    if (tun->remote_endpoint_list) {
-        bh_list_t* cur_remote_endpoint_list = tun->remote_endpoint_list;
-        while (cur_remote_endpoint_list) {
-            tunnel_endpoint_t* cur_remote_endpoint =
-                (tunnel_endpoint_t*)cur_remote_endpoint_list->data;
-
-            // Query existing route to find the gateway for this VTEP
-            struct {
-                struct nlmsghdr nlh;
-                struct rtmsg    rtm;
-                char buf[RTA_LENGTH(4)];
-            } get_request;
-
-            memset(&get_request, 0, sizeof(get_request));
-            get_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
-            get_request.nlh.nlmsg_flags = NLM_F_REQUEST;
-            get_request.nlh.nlmsg_type  = RTM_GETROUTE;
-            get_request.nlh.nlmsg_seq   = 1;
-            get_request.nlh.nlmsg_pid   = getpid();
-
-            get_request.rtm.rtm_family   = AF_INET;
-            get_request.rtm.rtm_dst_len  = 32;
-            get_request.rtm.rtm_src_len  = 0;
-            get_request.rtm.rtm_tos      = 0;
-            get_request.rtm.rtm_table    = RT_TABLE_MAIN;
-            get_request.rtm.rtm_protocol = RTPROT_UNSPEC;
-            get_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
-            get_request.rtm.rtm_type     = RTN_UNSPEC;
-
-            // Add RTA_DST attribute (VTEP IP)
-            struct rtattr *rta = (struct rtattr *)((char *)&get_request +
-                                  NLMSG_ALIGN(get_request.nlh.nlmsg_len));
-            rta->rta_type = RTA_DST;
-            rta->rta_len  = RTA_LENGTH(4);
-            memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 4);
-            get_request.nlh.nlmsg_len = NLMSG_ALIGN(get_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(rta->rta_len);
-
-            char response[4096];
-            int ret = netlink_send_recv(sock, &get_request.nlh, get_request.nlh.nlmsg_len,
-                                        response, sizeof(response));
-            if (ret < 0) {
-                PrintError("Failed to query route for VTEP %u.%u.%u.%u\n",
-                          cur_remote_endpoint->remote_endpoint.addr[0],
-                          cur_remote_endpoint->remote_endpoint.addr[1],
-                          cur_remote_endpoint->remote_endpoint.addr[2],
-                          cur_remote_endpoint->remote_endpoint.addr[3]);
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            // Parse response to find gateway
-            uint32_t vtep_gateway = 0;
-            struct nlmsghdr *resp = (struct nlmsghdr *)response;
-            int resp_len = ret;
-            for (; NLMSG_OK(resp, (unsigned int)resp_len);
-                   resp = NLMSG_NEXT(resp, resp_len))
-            {
-                if (resp->nlmsg_type != RTM_NEWROUTE)
-                    continue;
-
-                struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(resp);
-                if (rtm->rtm_family != AF_INET)
-                    continue;
-
-                struct rtattr *attr = RTM_RTA(rtm);
-                int attr_len = RTM_PAYLOAD(resp);
-                for (; RTA_OK(attr, attr_len); attr = RTA_NEXT(attr, attr_len)) {
-                    if (attr->rta_type == RTA_GATEWAY) {
-                        vtep_gateway = *(uint32_t *)RTA_DATA(attr);
-                    }
-                }
-            }
-
-            if (vtep_gateway == 0) {
-                PrintError("No route found for VTEP %u.%u.%u.%u\n",
-                          cur_remote_endpoint->remote_endpoint.addr[0],
-                          cur_remote_endpoint->remote_endpoint.addr[1],
-                          cur_remote_endpoint->remote_endpoint.addr[2],
-                          cur_remote_endpoint->remote_endpoint.addr[3]);
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            // Create route: ip route add <vtep_ip>/32 via <vtep_gateway>
-            struct {
-                struct nlmsghdr nlh;
-                struct rtmsg    rtm;
-                char buf[1024];
-            } add_request;
-
-            memset(&add_request, 0, sizeof(add_request));
-            add_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
-            add_request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_REPLACE | NLM_F_ACK;
-            add_request.nlh.nlmsg_type  = RTM_NEWROUTE;
-            add_request.nlh.nlmsg_seq   = 1;
-            add_request.nlh.nlmsg_pid   = getpid();
-
-            add_request.rtm.rtm_family   = AF_INET;
-            add_request.rtm.rtm_dst_len  = 32;
-            add_request.rtm.rtm_src_len  = 0;
-            add_request.rtm.rtm_tos      = 0;
-            add_request.rtm.rtm_table    = RT_TABLE_MAIN;
-            add_request.rtm.rtm_protocol = RTPROT_STATIC;
-            add_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
-            add_request.rtm.rtm_type     = RTN_UNICAST;
-            add_request.rtm.rtm_flags    = 0;
-
-            rta = (struct rtattr *)((char *)&add_request +
-                   NLMSG_ALIGN(add_request.nlh.nlmsg_len));
-            rta->rta_type = RTA_DST;
-            rta->rta_len  = RTA_LENGTH(4);
-            memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 4);
-            add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(rta->rta_len);
-
-            rta = (struct rtattr *)((char *)&add_request +
-                   NLMSG_ALIGN(add_request.nlh.nlmsg_len));
-            rta->rta_type = RTA_GATEWAY;
-            rta->rta_len  = RTA_LENGTH(4);
-            memcpy(RTA_DATA(rta), &vtep_gateway, 4);
-            add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(rta->rta_len);
-
-            char add_response[4096];
-            ret = netlink_send_recv(sock, &add_request.nlh, add_request.nlh.nlmsg_len,
-                                    add_response, sizeof(add_response));
-            if (ret < 0) {
-                PrintError("Failed to add route to VTEP %u.%u.%u.%u\n",
-                          cur_remote_endpoint->remote_endpoint.addr[0],
-                          cur_remote_endpoint->remote_endpoint.addr[1],
-                          cur_remote_endpoint->remote_endpoint.addr[2],
-                          cur_remote_endpoint->remote_endpoint.addr[3]);
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            struct nlmsghdr *add_resp = (struct nlmsghdr *)add_response;
-            if (add_resp->nlmsg_type == NLMSG_ERROR) {
-                struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(add_resp);
-                if (err->error) {
-                    PrintError("Failed to add route to VTEP %u.%u.%u.%u: %s\n",
-                              cur_remote_endpoint->remote_endpoint.addr[0],
-                              cur_remote_endpoint->remote_endpoint.addr[1],
-                              cur_remote_endpoint->remote_endpoint.addr[2],
-                              cur_remote_endpoint->remote_endpoint.addr[3],
-                              strerror(-err->error));
-                    cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                    continue;
-                }
-            }
-
-            PrintInform("Added route to VTEP %u.%u.%u.%u via %u.%u.%u.%u\n",
-                        cur_remote_endpoint->remote_endpoint.addr[0],
-                        cur_remote_endpoint->remote_endpoint.addr[1],
-                        cur_remote_endpoint->remote_endpoint.addr[2],
-                        cur_remote_endpoint->remote_endpoint.addr[3],
-                        ((uint8_t *)&vtep_gateway)[0],
-                        ((uint8_t *)&vtep_gateway)[1],
-                        ((uint8_t *)&vtep_gateway)[2],
-                        ((uint8_t *)&vtep_gateway)[3]);
-
-            cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-        }
-    }
+    // 1. Add routes to each VTEP from remote_endpoint_ht
+    ht_foreach(tun->remote_endpoint_ht, vtep_route_add_ipv4_cb, &sock);
 
     // 2. Add the main route specified in the command
     struct {
@@ -970,148 +1196,8 @@ int cmd_route_ipv6_add(CMD_ARGS) {
         return -1;
     }
 
-    // 1. Add routes to each VTEP from remote_endpoint_list
-    if (tun->remote_endpoint_list) {
-        bh_list_t* cur_remote_endpoint_list = tun->remote_endpoint_list;
-        while (cur_remote_endpoint_list) {
-            tunnel_endpoint_t* cur_remote_endpoint =
-                (tunnel_endpoint_t*)cur_remote_endpoint_list->data;
-
-            // Query existing route to find the gateway for this VTEP
-            struct {
-                struct nlmsghdr nlh;
-                struct rtmsg    rtm;
-                char buf[RTA_LENGTH(16)];
-            } get_request;
-
-            memset(&get_request, 0, sizeof(get_request));
-            get_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
-            get_request.nlh.nlmsg_flags = NLM_F_REQUEST;
-            get_request.nlh.nlmsg_type  = RTM_GETROUTE;
-            get_request.nlh.nlmsg_seq   = 1;
-            get_request.nlh.nlmsg_pid   = getpid();
-
-            get_request.rtm.rtm_family   = AF_INET6;
-            get_request.rtm.rtm_dst_len  = 128;
-            get_request.rtm.rtm_src_len  = 0;
-            get_request.rtm.rtm_tos      = 0;
-            get_request.rtm.rtm_table    = RT_TABLE_MAIN;
-            get_request.rtm.rtm_protocol = RTPROT_UNSPEC;
-            get_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
-            get_request.rtm.rtm_type     = RTN_UNSPEC;
-
-            // Add RTA_DST attribute (VTEP IP)
-            struct rtattr *rta = (struct rtattr *)((char *)&get_request +
-                                  NLMSG_ALIGN(get_request.nlh.nlmsg_len));
-            rta->rta_type = RTA_DST;
-            rta->rta_len  = RTA_LENGTH(16);
-            memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 16);
-            get_request.nlh.nlmsg_len = NLMSG_ALIGN(get_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(rta->rta_len);
-
-            char response[4096];
-            int ret = netlink_send_recv(sock, &get_request.nlh, get_request.nlh.nlmsg_len,
-                                        response, sizeof(response));
-            if (ret < 0) {
-                PrintError("Failed to query route for VTEP\n");
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            // Parse response to find gateway
-            struct in6_addr vtep_gateway = {0};
-            struct nlmsghdr *resp = (struct nlmsghdr *)response;
-            int resp_len = ret;
-            for (; NLMSG_OK(resp, (unsigned int)resp_len);
-                   resp = NLMSG_NEXT(resp, resp_len))
-            {
-                if (resp->nlmsg_type != RTM_NEWROUTE)
-                    continue;
-
-                struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(resp);
-                if (rtm->rtm_family != AF_INET6)
-                    continue;
-
-                struct rtattr *attr = RTM_RTA(rtm);
-                int attr_len = RTM_PAYLOAD(resp);
-                for (; RTA_OK(attr, attr_len); attr = RTA_NEXT(attr, attr_len)) {
-                    if (attr->rta_type == RTA_GATEWAY) {
-                        memcpy(&vtep_gateway, RTA_DATA(attr), 16);
-                    }
-                }
-            }
-
-            if (memcmp(&vtep_gateway, &((struct in6_addr){0}), 16) == 0) {
-                PrintError("No route found for VTEP\n");
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            // Create route: ip6 route add <vtep_ip>/128 via <vtep_gateway>
-            struct {
-                struct nlmsghdr nlh;
-                struct rtmsg    rtm;
-                char buf[1024];
-            } add_request;
-
-            memset(&add_request, 0, sizeof(add_request));
-            add_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
-            add_request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_REPLACE | NLM_F_ACK;
-            add_request.nlh.nlmsg_type  = RTM_NEWROUTE;
-            add_request.nlh.nlmsg_seq   = 1;
-            add_request.nlh.nlmsg_pid   = getpid();
-
-            add_request.rtm.rtm_family   = AF_INET6;
-            add_request.rtm.rtm_dst_len  = 128;
-            add_request.rtm.rtm_src_len  = 0;
-            add_request.rtm.rtm_tos      = 0;
-            add_request.rtm.rtm_table    = RT_TABLE_MAIN;
-            add_request.rtm.rtm_protocol = RTPROT_STATIC;
-            add_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
-            add_request.rtm.rtm_type     = RTN_UNICAST;
-            add_request.rtm.rtm_flags    = 0;
-
-            rta = (struct rtattr *)((char *)&add_request +
-                   NLMSG_ALIGN(add_request.nlh.nlmsg_len));
-            rta->rta_type = RTA_DST;
-            rta->rta_len  = RTA_LENGTH(16);
-            memcpy(RTA_DATA(rta), &cur_remote_endpoint->remote_endpoint.value, 16);
-            add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(rta->rta_len);
-
-            rta = (struct rtattr *)((char *)&add_request +
-                   NLMSG_ALIGN(add_request.nlh.nlmsg_len));
-            rta->rta_type = RTA_GATEWAY;
-            rta->rta_len  = RTA_LENGTH(16);
-            memcpy(RTA_DATA(rta), &vtep_gateway, 16);
-            add_request.nlh.nlmsg_len = NLMSG_ALIGN(add_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(rta->rta_len);
-
-            char add_response[4096];
-            ret = netlink_send_recv(sock, &add_request.nlh, add_request.nlh.nlmsg_len,
-                                    add_response, sizeof(add_response));
-            if (ret < 0) {
-                PrintError("Failed to add route to VTEP\n");
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            struct nlmsghdr *add_resp = (struct nlmsghdr *)add_response;
-            if (add_resp->nlmsg_type == NLMSG_ERROR) {
-                struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(add_resp);
-                if (err->error) {
-                    PrintError("Failed to add route to VTEP: %s\n",
-                              strerror(-err->error));
-                    cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                    continue;
-                }
-            }
-
-            PrintInform("Added route to VTEP via gateway\n");
-
-            cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-        }
-    }
+    // 1. Add routes to each VTEP from remote_endpoint_ht
+    ht_foreach(tun->remote_endpoint_ht, vtep_route_add_ipv6_cb, &sock);
 
     // 2. Add the main route specified in the command
     struct {
@@ -1294,16 +1380,7 @@ int cmd_route_ipv4_del(CMD_ARGS) {
     /* After tearing down the tunnel route, remove the per-VTEP helper routes
      * (reverse order of add: main route first, then the VTEP host routes).
      * Mirrors the Linux netlink logic. */
-    if (tun->remote_endpoint_list) {
-        bh_list_t *ep_it = tun->remote_endpoint_list;
-        while (ep_it) {
-            tunnel_endpoint_t *ep = (tunnel_endpoint_t *)ep_it->data;
-            if (ep && ep->remote_endpoint.value) {
-                win_unpin_vtep_route(&ep->remote_endpoint);
-            }
-            ep_it = ep_it->next;
-        }
-    }
+    ht_foreach(tun->remote_endpoint_ht, win_unpin_vtep_cb, NULL);
 
     return 0;
 
@@ -1401,81 +1478,8 @@ int cmd_route_ipv4_del(CMD_ARGS) {
 
     PrintInform("Deleted route %s/%d via %s\n", dest_ip_str, mask_len, gateway_ip_str);
 
-    // 2. Delete routes for each VTEP from remote_endpoint_list
-    if (tun->remote_endpoint_list) {
-        bh_list_t* cur_remote_endpoint_list = tun->remote_endpoint_list;
-        while (cur_remote_endpoint_list) {
-            tunnel_endpoint_t* cur_remote_endpoint =
-                (tunnel_endpoint_t*)cur_remote_endpoint_list->data;
-
-            struct {
-                struct nlmsghdr nlh;
-                struct rtmsg    rtm;
-                char buf[1024];
-            } del_request;
-
-            memset(&del_request, 0, sizeof(del_request));
-            del_request.nlh.nlmsg_len   = NLMSG_LENGTH(sizeof(struct rtmsg));
-            del_request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-            del_request.nlh.nlmsg_type  = RTM_DELROUTE;
-            del_request.nlh.nlmsg_seq   = 1;
-            del_request.nlh.nlmsg_pid   = getpid();
-
-            del_request.rtm.rtm_family   = AF_INET;
-            del_request.rtm.rtm_dst_len  = 32;
-            del_request.rtm.rtm_src_len  = 0;
-            del_request.rtm.rtm_tos      = 0;
-            del_request.rtm.rtm_table    = RT_TABLE_MAIN;
-            del_request.rtm.rtm_protocol = RTPROT_STATIC;
-            del_request.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
-            del_request.rtm.rtm_type     = RTN_UNICAST;
-            del_request.rtm.rtm_flags    = 0;
-
-            struct rtattr *del_rta = (struct rtattr *)((char *)&del_request +
-                                      NLMSG_ALIGN(del_request.nlh.nlmsg_len));
-            del_rta->rta_type = RTA_DST;
-            del_rta->rta_len  = RTA_LENGTH(4);
-            memcpy(RTA_DATA(del_rta), &cur_remote_endpoint->remote_endpoint.value, 4);
-            del_request.nlh.nlmsg_len = NLMSG_ALIGN(del_request.nlh.nlmsg_len) +
-                                        RTA_ALIGN(del_rta->rta_len);
-
-            char del_response[4096];
-            ret = netlink_send_recv(sock, &del_request.nlh, del_request.nlh.nlmsg_len,
-                                    del_response, sizeof(del_response));
-            if (ret < 0) {
-                PrintError("Failed to delete route for VTEP %u.%u.%u.%u\n",
-                          cur_remote_endpoint->remote_endpoint.addr[0],
-                          cur_remote_endpoint->remote_endpoint.addr[1],
-                          cur_remote_endpoint->remote_endpoint.addr[2],
-                          cur_remote_endpoint->remote_endpoint.addr[3]);
-                cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                continue;
-            }
-
-            struct nlmsghdr *del_resp = (struct nlmsghdr *)del_response;
-            if (del_resp->nlmsg_type == NLMSG_ERROR) {
-                struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(del_resp);
-                if (err->error) {
-                    PrintError("Failed to delete route for VTEP %u.%u.%u.%u: %s\n",
-                              cur_remote_endpoint->remote_endpoint.addr[0],
-                              cur_remote_endpoint->remote_endpoint.addr[1],
-                              cur_remote_endpoint->remote_endpoint.addr[2],
-                              cur_remote_endpoint->remote_endpoint.addr[3],
-                              strerror(-err->error));
-                    cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-                    continue;
-                }
-            }
-
-            PrintInform("Deleted route for VTEP %u.%u.%u.%u\n",
-                        cur_remote_endpoint->remote_endpoint.addr[0],
-                        cur_remote_endpoint->remote_endpoint.addr[1],
-                        cur_remote_endpoint->remote_endpoint.addr[2],
-                        cur_remote_endpoint->remote_endpoint.addr[3]);
-
-            cur_remote_endpoint_list = cur_remote_endpoint_list->next;
-        }
-    }
+    // 2. Delete routes for each VTEP from remote_endpoint_ht
+    ht_foreach(tun->remote_endpoint_ht, vtep_route_del_ipv4_cb, &sock);
 
     close(sock);
     return 0;

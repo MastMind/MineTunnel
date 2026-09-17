@@ -237,6 +237,8 @@ int json_array_del_element(json_array_t o, unsigned int index) {
             break;
     }
 
+    free(*(o->element + index));
+
     if (ret) {
 #ifndef JSON_NO_PRINT_ERRORS
         fprintf(stderr, "json_array_del_element : can't delete element\n");
@@ -550,6 +552,7 @@ int json_object_del_element(json_object_t o, const char* key) {
     unsigned int i = 0;
     unsigned int index = 0;
     int ret = 0;
+    int found = 0;
     while (o->element && *(o->element + i)) {
         if (!strcmp((*(o->element + i))->key, key)) {
             switch ((*(o->element + i))->value->type) {
@@ -567,14 +570,17 @@ int json_object_del_element(json_object_t o, const char* key) {
             }
 
             free((*(o->element + i))->key);
+            free((*(o->element + i))->value);
+            free(*(o->element + i));
             index = i;
+            found = 1;
         }
 
         i++;
     }
 
-    if (i == 0) {
-        return 0;
+    if (!found) {
+        return -1;
     }
 
     if (ret) {
@@ -590,13 +596,14 @@ int json_object_del_element(json_object_t o, const char* key) {
 
     i--;
     if (i) {
-        o->element = (json_record_t*)realloc(o->element, sizeof(json_record_t) * i);
+        o->element = (json_record_t*)realloc(o->element, sizeof(json_record_t) * (i + 1));
         if (!(o->element)) {
 #ifndef JSON_NO_PRINT_ERRORS
             fprintf(stderr, "json_object_del_element : can't realloc memory for elements\n");
 #endif
             return -3;
         }
+        *(o->element + i) = NULL;
     } else {
         free(o->element);
         o->element = NULL;
@@ -1118,16 +1125,51 @@ static int parse_line(json_value_t v, const char* buf) {
                         }
 
                         line++;
-                        fragment = (char*)malloc(sizeof(char) * (strcspn(line, "\"") + 1));
-                        if (!fragment) {
-                            //something wrong
-                            ret = -2;
-                            goto end;
+
+                        //closing quote: first '"' not escaped by a backslash
+                        {
+                            size_t end_pos = 0;
+                            size_t i = 0;
+                            size_t o = 0;
+                            int escaped = 0;
+
+                            while (line[end_pos]) {
+                                if (escaped) {
+                                    escaped = 0;
+                                } else if (line[end_pos] == '\\') {
+                                    escaped = 1;
+                                } else if (line[end_pos] == '"') {
+                                    break;
+                                }
+
+                                end_pos++;
+                            }
+
+                            if (!line[end_pos]) {
+                                //unterminated string
+                                ret = -3;
+                                goto end;
+                            }
+
+                            fragment = (char*)malloc(sizeof(char) * (end_pos + 1));
+                            if (!fragment) {
+                                //something wrong
+                                ret = -2;
+                                goto end;
+                            }
+
+                            for (i = 0; i < end_pos; i++) {
+                                if (line[i] == '\\' && i + 1 < end_pos) {
+                                    i++; //drop backslash, keep the escaped char
+                                }
+
+                                fragment[o++] = line[i];
+                            }
+
+                            fragment[o] = '\0';
+                            line += end_pos;
                         }
 
-                        strncpy(fragment, line, strcspn(line, "\""));
-                        *(fragment + strcspn(line, "\"")) = '\0';
-                        line += strcspn(line, "\"");
                         break;
                     case '\\':
                         line++;
@@ -1348,16 +1390,51 @@ static int parse_line(json_value_t v, const char* buf) {
                         }
 
                         line++;
-                        fragment = (char*)malloc(sizeof(char) * (strcspn(line, "\"") + 1));
-                        if (!fragment) {
-                            //something wrong
-                            ret = -2;
-                            goto end;
+
+                        //closing quote: first '"' not escaped by a backslash
+                        {
+                            size_t end_pos = 0;
+                            size_t i = 0;
+                            size_t o = 0;
+                            int escaped = 0;
+
+                            while (line[end_pos]) {
+                                if (escaped) {
+                                    escaped = 0;
+                                } else if (line[end_pos] == '\\') {
+                                    escaped = 1;
+                                } else if (line[end_pos] == '"') {
+                                    break;
+                                }
+
+                                end_pos++;
+                            }
+
+                            if (!line[end_pos]) {
+                                //unterminated string
+                                ret = -3;
+                                goto end;
+                            }
+
+                            fragment = (char*)malloc(sizeof(char) * (end_pos + 1));
+                            if (!fragment) {
+                                //something wrong
+                                ret = -2;
+                                goto end;
+                            }
+
+                            for (i = 0; i < end_pos; i++) {
+                                if (line[i] == '\\' && i + 1 < end_pos) {
+                                    i++; //drop backslash, keep the escaped char
+                                }
+
+                                fragment[o++] = line[i];
+                            }
+
+                            fragment[o] = '\0';
+                            line += end_pos;
                         }
 
-                        strncpy(fragment, line, strcspn(line, "\""));
-                        *(fragment + strcspn(line, "\"")) = '\0';
-                        line += strcspn(line, "\"");
                         break;
                     case '\\':
                         line++;

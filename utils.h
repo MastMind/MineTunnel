@@ -76,80 +76,15 @@ void ExecScript(const char* filename);
  */
 int ExecEmbed(const char* payload, tunnel_entity_t* tun);
 
-/**
- * Hash function for tunnel entities
- * @param data Tunnel entity data
- * @return Hash value
- */
-uint32_t tunnel_hash_func(void* data);
+#define IP_PORT_KEY_LEN (IPV4_ADDR_LENGTH + PORT_LENGTH)
 
 /**
- * Comparison function for tunnel entities
- * @param arg1 First tunnel entity
- * @param arg2 Second tunnel entity
- * @return 0 if equal, non-zero otherwise
+ * Build the byte-array key (IP + port) used by the hash tables
+ * @param ip IPv4 address value
+ * @param port Port number
+ * @param key Output buffer (at least IP_PORT_KEY_LEN bytes)
  */
-int tunnel_cmp_func(void* arg1, void* arg2);
-
-/**
- * Hash function for endpoints
- * @param data Endpoint data
- * @return Hash value
- */
-uint32_t endpoint_hash_func(void* data);
-
-/**
- * Comparison function for endpoints
- * @param arg1 First endpoint
- * @param arg2 Second endpoint
- * @return 0 if equal, non-zero otherwise
- */
-int endpoint_cmp_func(void* arg1, void* arg2);
-
-/**
- * Hash function for file descriptor to tunnel mappings
- * @param data Mapping data
- * @return Hash value
- */
-uint32_t tun_map_hash_func(void* data);
-
-/**
- * Comparison function for file descriptor to tunnel mappings
- * @param arg1 First mapping
- * @param arg2 Second mapping
- * @return 0 if equal, non-zero otherwise
- */
-int tun_map_cmp_func(void* arg1, void* arg2);
-
-/**
- * Hash function for encryptors
- * @param data Encryptor data
- * @return Hash value
- */
-uint32_t encryptor_hash_func(void* data);
-
-/**
- * Comparison function for encryptors
- * @param arg1 First encryptor
- * @param arg2 Second encryptor
- * @return 0 if equal, non-zero otherwise
- */
-int encryptor_cmp_func(void* arg1, void* arg2);
-
-/**
- * Hash function for tunnel cache entries
- * @param data Cache entry data
- * @return Hash value
- */
-uint32_t tun_cache_hash_func(void* data);
-
-/**
- * Comparison function for tunnel cache entries
- * @param arg1 First cache entry
- * @param arg2 Second cache entry
- * @return 0 if equal, non-zero otherwise
- */
-int tun_cache_cmp_func(void* arg1, void* arg2);
+void ip_port_key(uint32_t ip, uint16_t port, unsigned char* key);
 
 /**
  * Strip whitespace from line
