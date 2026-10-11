@@ -1269,9 +1269,11 @@ static int build_tunnels(config_t* cfg) {
         tunnel_endpoint_t* new_endpoint = (tunnel_endpoint_t*)malloc(sizeof(tunnel_endpoint_t));
 
         if (!new_endpoint) {
-            PrintError("Internal error. Can't alloc memory for new tunnel endpoint\n");
+            PrintError("Internal error. Can't allocate memory for new tunnel endpoint\n");
             return -1;
         }
+
+        memset(new_endpoint, 0, sizeof(tunnel_endpoint_t));
 
         memset(&tun, 0, sizeof(tunnel_entity_t));
         tun.local_endpoint.value = tun_info->local_endpoint.value;

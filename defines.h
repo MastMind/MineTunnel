@@ -48,7 +48,7 @@
 #define DEFAULT_ICMP_ID 1234
 
 #define APP_NAME "MineTunnel"
-#define VERSION_STR "1.1.2"
+#define VERSION_STR "1.1.3"
 #define DEFAULT_MINE_TUN_NAME "mine_tun%d"
 #define DEFAULT_MINE_TAP_NAME "mine_tap%d"
 
@@ -73,6 +73,7 @@ typedef struct tunnel_endpoint_s {
     uint16_t remote_port;
     int      is_dynamic;
     int      ttl;
+    void*    wheel_node; //time_wheel_node_t* of the dyn wheel, NULL for static VTEPs
 } tunnel_endpoint_t;
 
 typedef enum tun_proto_e {

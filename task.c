@@ -94,8 +94,10 @@ static void encap_send_one(tunnel_entity_t* tun, char* packet_buf, uint16_t pack
             break;
     }
 
-    if (ep->is_dynamic) {
+    if (ep->is_dynamic && ep->wheel_node) {
         ep->ttl = MAX_DYNAMIC_ENDPOINT_TTL;
+        time_wheel_refresh(&tun->worker->dyn_wheel, ep->wheel_node,
+                            time(NULL), MAX_DYNAMIC_ENDPOINT_TTL);
     }
 }
 
@@ -111,51 +113,6 @@ static int encap_broadcast_cb(const void* key, size_t key_len, void* value, void
     encap_ctx_t* ctx = (encap_ctx_t*)user;
     encap_send_one(ctx->tun, ctx->buffer, ctx->size, (tunnel_endpoint_t*)value);
     return 0;
-}
-
-typedef struct cache_evict_ctx {
-    time_t timestamp;
-    unsigned char* keys;
-    size_t cap;
-    size_t count;
-} cache_evict_ctx_t;
-
-static int cache_evict_cb(const void* key, size_t key_len, void* value, void* user) {
-    tun_cache_t* c = (tun_cache_t*)value;
-    cache_evict_ctx_t* ctx = (cache_evict_ctx_t*)user;
-
-    time_t diff_time = time(NULL) - ctx->timestamp;
-    if (diff_time < 0) { //time overflow case
-        diff_time = 1;
-    }
-
-    if (diff_time >= c->ttl) {
-        if (ctx->count < ctx->cap) {
-            memcpy(ctx->keys + ctx->count * key_len, key, key_len);
-            ctx->count++;
-        }
-    } else {
-        c->ttl -= (uint16_t)diff_time;
-    }
-    return 0;
-}
-
-static void cache_evict_expired(worker_t* worker, time_t cur_timestamp) {
-    cache_evict_ctx_t ctx;
-    size_t i;
-
-    ctx.timestamp = cur_timestamp;
-    ctx.count = 0;
-    ctx.cap = ht_count(worker->tun_cache_ht);
-    ctx.keys = ctx.cap ? (unsigned char*)malloc(ctx.cap * TUN_CACHE_KEY_LEN) : NULL;
-
-    ht_foreach(worker->tun_cache_ht, cache_evict_cb, &ctx);
-
-    for (i = 0; i < ctx.count; i++) {
-        ht_remove(worker->tun_cache_ht, ctx.keys + i * TUN_CACHE_KEY_LEN,
-                  TUN_CACHE_KEY_LEN, free);
-    }
-    free(ctx.keys);
 }
 
 static ssize_t prepare_udp(char* sendbuf, char* packet_buf, uint16_t packet_size,
@@ -227,6 +184,8 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     }
 
     worker->tun_cache_ht = NULL;
+    time_wheel_init(&worker->time_wheel, TUN_CACHE_KEY_LEN);
+    time_wheel_init(&worker->dyn_wheel, IP_PORT_KEY_LEN);
     worker->new_task_idx = 0;
     worker->cur_task_idx = 0;
     worker->dyn_endpoints_enabled = 0;
@@ -383,7 +342,9 @@ void task_destroy_all_workers() {
         }
 #endif
 
+        time_wheel_reset(&w->time_wheel);
         ht_free(w->tun_cache_ht, free);
+        time_wheel_reset(&w->dyn_wheel);
         free(w);
     }
 
@@ -610,12 +571,12 @@ static void *tun_cache_thread_func(void *param)
     worker_t* worker = (worker_t*)param;
 
     while (1) {
-        time_t cur_timestamp = time(NULL);
         SLEEP_1S();
 
         WORKER_CACHE_LOCK(worker);
         if (worker->tun_cache_ht) {
-            cache_evict_expired(worker, cur_timestamp);
+            time_wheel_tick(&worker->time_wheel, worker->tun_cache_ht,
+                             time(NULL), NULL, NULL);
         }
         WORKER_CACHE_UNLOCK(worker);
     }
@@ -970,9 +931,15 @@ static int search_cache(worker_t* worker, const char* buf, uint16_t size,
     tun_cache = (tun_cache_t*)ht_get(worker->tun_cache_ht, key, sizeof(key));
     if (tun_cache) {
         tun_cache->ttl = MAX_CACHE_TTL;
+        if (tun_cache->wheel_node) {
+            time_wheel_refresh(&worker->time_wheel, tun_cache->wheel_node,
+                                time(NULL), MAX_CACHE_TTL);
+        }
+
         if (endpoint) {
             *endpoint = tun_cache->endpoint;
         }
+
         WORKER_CACHE_UNLOCK(worker);
         return 1;
     }
@@ -1089,6 +1056,7 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size,
     }
 
     memcpy(tun_cache, &cur_tun_cache, sizeof(tun_cache_t));
+    tun_cache->wheel_node = NULL;
 
     unsigned char key[TUN_CACHE_KEY_LEN];
     tun_cache_key(tun_cache, key);
@@ -1106,14 +1074,23 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size,
 
     if (ht_add(worker->tun_cache_ht, key, sizeof(key), tun_cache) != HT_OK) {
         free(tun_cache);
+        WORKER_CACHE_UNLOCK(worker);
+        return;
     }
 
+    tun_cache->wheel_node = time_wheel_insert(&worker->time_wheel, key,
+                                               sizeof(key), time(NULL),
+                                               MAX_CACHE_TTL);
+    if (tun_cache->wheel_node) {
 #ifdef DEBUG
-    fprintf(stdout, "update_cache: added ip %u.%u.%u.%u ttl %u\n",
-            tun_cache->ip.addr[0], tun_cache->ip.addr[1],
-            tun_cache->ip.addr[2], tun_cache->ip.addr[3],
-            tun_cache->ttl);
+        fprintf(stdout, "update_cache: added ip %u.%u.%u.%u ttl %u\n",
+                tun_cache->ip.addr[0], tun_cache->ip.addr[1],
+                tun_cache->ip.addr[2], tun_cache->ip.addr[3],
+                tun_cache->ttl);
 #endif
+    } else {
+        ht_remove(worker->tun_cache_ht, key, sizeof(key), free);
+    }
     WORKER_CACHE_UNLOCK(worker);
 }
 
@@ -1135,6 +1112,10 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
                 found_endpoint->remote_port);
 #endif
             found_endpoint->ttl = MAX_DYNAMIC_ENDPOINT_TTL;
+            if (found_endpoint->wheel_node) {
+                time_wheel_refresh(&worker->dyn_wheel, found_endpoint->wheel_node,
+                                    time(NULL), MAX_DYNAMIC_ENDPOINT_TTL);
+            }
         } else {
             DYN_MUTEX_UNLOCK(worker);
             return;
@@ -1153,6 +1134,7 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
         memcpy(new_endpoint, cur_endpoint, sizeof(tunnel_endpoint_t));
         new_endpoint->is_dynamic = 1;
         new_endpoint->ttl = MAX_DYNAMIC_ENDPOINT_TTL;
+        new_endpoint->wheel_node = NULL;
 
         if (!tun->remote_endpoint_ht) {
             tun->remote_endpoint_ht = ht_create();
@@ -1164,7 +1146,22 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
             }
         }
 
-        ht_add(tun->remote_endpoint_ht, ep_key, sizeof(ep_key), new_endpoint);
+        if (ht_add(tun->remote_endpoint_ht, ep_key, sizeof(ep_key), new_endpoint) != HT_OK) {
+            PrintError("Internal error. Can't add dynamic endpoint to table\n");
+            free(new_endpoint);
+            DYN_MUTEX_UNLOCK(worker);
+            return;
+        }
+
+        new_endpoint->wheel_node = time_wheel_insert(&worker->dyn_wheel, ep_key,
+                                                      sizeof(ep_key), time(NULL),
+                                                      MAX_DYNAMIC_ENDPOINT_TTL);
+        if (!new_endpoint->wheel_node) {
+            PrintError("Internal error. Can't schedule dynamic endpoint expiry\n");
+            ht_remove(tun->remote_endpoint_ht, ep_key, sizeof(ep_key), free);
+            DYN_MUTEX_UNLOCK(worker);
+            return;
+        }
 
         PrintInform("Registered new dynamic endpoint %u.%u.%u.%u:%u\n",
                     cur_endpoint->remote_endpoint.addr[0], cur_endpoint->remote_endpoint.addr[1],
@@ -1172,6 +1169,7 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
                     cur_endpoint->remote_port);
 
         WORKER_CACHE_LOCK(worker);
+        time_wheel_reset(&worker->time_wheel);
         ht_free(worker->tun_cache_ht, free);
         worker->tun_cache_ht = NULL;
         WORKER_CACHE_UNLOCK(worker);
@@ -1180,66 +1178,30 @@ static void update_remote_endpoints(worker_t* worker, const char* buf, uint16_t 
     DYN_MUTEX_UNLOCK(worker);
 }
 
-typedef struct dyn_evict_ctx {
-    time_t timestamp;
-    unsigned char* keys;
-    size_t cap;
-    size_t count;
-} dyn_evict_ctx_t;
-
-static int dyn_evict_cb(const void* key, size_t key_len, void* value, void* user) {
-    tunnel_endpoint_t* ep = (tunnel_endpoint_t*)value;
-    dyn_evict_ctx_t* ctx = (dyn_evict_ctx_t*)user;
-
-    if (!ep->is_dynamic) {
-        return 0;
-    }
-
-    time_t diff_time = time(NULL) - ctx->timestamp;
-    if (diff_time < 0) {
-        diff_time = 1;
-    }
-
-    if (diff_time >= ep->ttl) {
-        PrintInform("Delete dynamic endpoint %u.%u.%u.%u:%u\n",
-                    ep->remote_endpoint.addr[0],
-                    ep->remote_endpoint.addr[1],
-                    ep->remote_endpoint.addr[2],
-                    ep->remote_endpoint.addr[3],
-                    ep->remote_port);
-        if (ctx->count < ctx->cap) {
-            memcpy(ctx->keys + ctx->count * key_len, key, key_len);
-            ctx->count++;
-        }
-    } else {
-        ep->ttl -= (uint16_t)diff_time;
-    }
-    return 0;
+static void dyn_ep_expire_cb(const void* key, size_t key_len, void* user) {
+    (void)key_len;
+    (void)user;
+    const unsigned char* k = (const unsigned char*)key;
+    uint16_t port;
+    memcpy(&port, k + IPV4_ADDR_LENGTH, sizeof(port));
+    PrintInform("Delete dynamic endpoint %u.%u.%u.%u:%u\n",
+                (unsigned)k[0], (unsigned)k[1], (unsigned)k[2], (unsigned)k[3],
+                (unsigned)port);
 }
 
 static void dyn_evict_expired(tunnel_entity_t* tun, worker_t* worker, time_t cur_timestamp) {
-    dyn_evict_ctx_t ctx;
-    size_t i;
+    size_t evicted = time_wheel_tick(&worker->dyn_wheel, tun->remote_endpoint_ht,
+                                      cur_timestamp, dyn_ep_expire_cb, NULL);
 
-    ctx.timestamp = cur_timestamp;
-    ctx.count = 0;
-    ctx.cap = ht_count(tun->remote_endpoint_ht);
-    ctx.keys = ctx.cap ? (unsigned char*)malloc(ctx.cap * IP_PORT_KEY_LEN) : NULL;
-
-    ht_foreach(tun->remote_endpoint_ht, dyn_evict_cb, &ctx);
-
-    if (ctx.count > 0) {
+    if (evicted > 0) {
+        /* tun_cache entries point into remote_endpoint_ht: drop all of them
+         * so no cached endpoint becomes a dangling pointer */
         WORKER_CACHE_LOCK(worker);
+        time_wheel_reset(&worker->time_wheel);
         ht_free(worker->tun_cache_ht, free);
         worker->tun_cache_ht = NULL;
         WORKER_CACHE_UNLOCK(worker);
     }
-
-    for (i = 0; i < ctx.count; i++) {
-        ht_remove(tun->remote_endpoint_ht, ctx.keys + i * IP_PORT_KEY_LEN,
-                  IP_PORT_KEY_LEN, free);
-    }
-    free(ctx.keys);
 }
 
 #ifdef _WIN32

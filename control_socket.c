@@ -5,6 +5,7 @@
 #include "utils.h"
 #include "defines.h"
 #include "ht.h"
+#include "time_wheel.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -576,6 +577,7 @@ static void clear_one_cache(tunnel_entity_t* t) {
         return;
     }
     cache_lock(w);
+    time_wheel_reset(&w->time_wheel);
     ht_free(w->tun_cache_ht, free);
     w->tun_cache_ht = NULL;
     cache_unlock(w);

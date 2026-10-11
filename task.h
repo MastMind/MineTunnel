@@ -10,6 +10,7 @@
 #endif
 
 #include "ht.h"
+#include "time_wheel.h"
 #include "defines.h"
 #include "utils.h"
 
@@ -17,6 +18,14 @@
 #define MAX_TASKS 256
 #define MAX_CACHE_TTL 600
 #define MAX_DYNAMIC_ENDPOINT_TTL 900 //IMPORTANT: should be greater than MAX_CACHE_TTL
+
+#if MAX_CACHE_TTL >= CACHE_WHEEL_SLOTS
+#error "CACHE_WHEEL_SLOTS must be greater than MAX_CACHE_TTL"
+#endif
+
+#if MAX_DYNAMIC_ENDPOINT_TTL >= CACHE_WHEEL_SLOTS
+#error "CACHE_WHEEL_SLOTS must be greater than MAX_DYNAMIC_ENDPOINT_TTL"
+#endif
 
 #ifdef _WIN32
 #define WAIT_FOR_OBJECT_DELAY 500
@@ -52,10 +61,12 @@ typedef struct worker_s {
     pthread_mutex_t     tun_cache_mutex;
     pthread_cond_t      cond_empty;
 #endif
-    task_t*              task_buf;
+    task_t*             task_buf;
     uint16_t            new_task_idx;
     uint16_t            cur_task_idx;
     ht_t*               tun_cache_ht;
+    time_wheel_t        time_wheel;
+    time_wheel_t        dyn_wheel;
     int                 dyn_endpoints_enabled;
     struct tunnel_entity_s* current_tun;
 #ifdef _WIN32
@@ -74,6 +85,7 @@ typedef struct worker_s {
     mac_addr mac;
     tunnel_endpoint_t* endpoint;
     uint16_t ttl;
+    time_wheel_node_t* wheel_node;
 } tun_cache_t;
 
 /**
