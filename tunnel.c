@@ -1699,16 +1699,24 @@ static DWORD WINAPI wintun_reader_thread_func(LPVOID param) {
 
         if (pkt) {
             if (pkt_size > 0) {
+                worker_t* w = ctx->tun->worker;
                 task_t* new_task = NULL;
-                if (task_get_new(ctx->tun->worker, &new_task)) {
+                int full = 0;
+                EnterCriticalSection(&w->task_cs);
+                if (task_get_new(w, &new_task)) {
+                    full = 1;
+                } else {
+                    memcpy(new_task->buffer, pkt, pkt_size);
+                    new_task->tun_map = ctx->tun_map;
+                    new_task->size = (uint16_t)pkt_size;
+                    new_task->endpoint_flag = 0;
+                    task_add(w);
+                }
+                LeaveCriticalSection(&w->task_cs);
+                if (full) {
                     PrintError("The task buffer is full. Dropping...\n");
                     continue;
                 }
-                memcpy(new_task->buffer, pkt, pkt_size);
-                new_task->tun_map = ctx->tun_map;
-                new_task->size = (uint16_t)pkt_size;
-                new_task->endpoint_flag = 0;
-                task_add(ctx->tun->worker);
                 wintun_release_packet(wctx, pkt);
             } else {
                 wintun_release_packet(wctx, pkt);
@@ -1773,16 +1781,24 @@ static DWORD WINAPI iocp_thread_func(LPVOID param) {
         switch (ctx->op) {
             case IOCP_OP_TAP_READ: {
                 if (bytes > 0) {
+                    worker_t* w = ctx->tun->worker;
                     task_t* new_task = NULL;
-                    if (task_get_new(ctx->tun->worker, &new_task)) {
+                    int full = 0;
+                    EnterCriticalSection(&w->task_cs);
+                    if (task_get_new(w, &new_task)) {
+                        full = 1;
+                    } else {
+                        memcpy(new_task->buffer, ctx->buf, bytes);
+                        new_task->tun_map = ctx->tun_map;
+                        new_task->size = (uint16_t)bytes;
+                        new_task->endpoint_flag = 0;
+                        task_add(w);
+                    }
+                    LeaveCriticalSection(&w->task_cs);
+                    if (full) {
                        PrintError("The task buffer is full. Dropping...\n");
                         continue;
                     }
-                    memcpy(new_task->buffer, ctx->buf, bytes);
-                    new_task->tun_map = ctx->tun_map;
-                    new_task->size = (uint16_t)bytes;
-                    new_task->endpoint_flag = 0;
-                    task_add(ctx->tun->worker);
                 }
                 repost_tap_read(ctx);
                 break;
@@ -1790,24 +1806,32 @@ static DWORD WINAPI iocp_thread_func(LPVOID param) {
 
             case IOCP_OP_SOCK_READ: {
                 if (bytes > 0) {
+                    worker_t* w = ctx->tun->worker;
                     task_t* new_task = NULL;
-                    if (task_get_new(ctx->tun->worker, &new_task)) {
+                    int full = 0;
+                    EnterCriticalSection(&w->task_cs);
+                    if (task_get_new(w, &new_task)) {
+                        full = 1;
+                    } else {
+                        memcpy(new_task->buffer, ctx->buf, bytes);
+                        new_task->tun_map = ctx->tun_map;
+                        new_task->size = (uint16_t)bytes;
+                        if (ctx->proto == PROTO_UDP) {
+                            new_task->endpoint_flag = 1;
+                            new_task->endpoint.remote_endpoint.value =
+                                ctx->remote_addr.sin_addr.s_addr;
+                            new_task->endpoint.remote_port =
+                                ntohs(ctx->remote_addr.sin_port);
+                        } else {
+                            new_task->endpoint_flag = 0;
+                        }
+                        task_add(w);
+                    }
+                    LeaveCriticalSection(&w->task_cs);
+                    if (full) {
                         PrintError("The task buffer is full. Dropping...\n");
                         continue;
                     }
-                    memcpy(new_task->buffer, ctx->buf, bytes);
-                    new_task->tun_map = ctx->tun_map;
-                    new_task->size = (uint16_t)bytes;
-                    if (ctx->proto == PROTO_UDP) {
-                        new_task->endpoint_flag = 1;
-                        new_task->endpoint.remote_endpoint.value =
-                            ctx->remote_addr.sin_addr.s_addr;
-                        new_task->endpoint.remote_port =
-                            ntohs(ctx->remote_addr.sin_port);
-                    } else {
-                        new_task->endpoint_flag = 0;
-                    }
-                    task_add(ctx->tun->worker);
                 }
                 repost_sock_read(ctx);
                 break;

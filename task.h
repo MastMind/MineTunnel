@@ -52,6 +52,7 @@ typedef struct worker_s {
     HANDLE              tun_cache_thr;
     CRITICAL_SECTION    mutex;
     CRITICAL_SECTION    tun_cache_mutex;
+    CRITICAL_SECTION    task_cs;
     CONDITION_VARIABLE  cond_empty;
 #else
     pthread_t           thr;
