@@ -8,6 +8,7 @@
 #else
 #include <pthread.h>
 #endif
+#include <stdatomic.h>
 
 #include "ht.h"
 #include "time_wheel.h"
@@ -60,10 +61,12 @@ typedef struct worker_s {
     pthread_attr_t      tun_cache_attr;
     pthread_mutex_t     tun_cache_mutex;
     pthread_cond_t      cond_empty;
+    atomic_int          futex_word;
 #endif
     task_t*             task_buf;
-    uint16_t            new_task_idx;
-    uint16_t            cur_task_idx;
+    atomic_ushort       new_task_idx;
+    atomic_ushort       cur_task_idx;
+    atomic_uint         full_flag;
     ht_t*               tun_cache_ht;
     time_wheel_t        time_wheel;
     time_wheel_t        dyn_wheel;
@@ -100,7 +103,8 @@ void task_create_worker(worker_t* worker, struct tunnel_entity_s* tun);
  * @param worker Worker structure
  * @param task Pointer to store the task
  */
-void task_get_new(worker_t* worker, task_t** task);
+// void task_get_new(worker_t* worker, task_t** task);
+int task_get_new(worker_t* worker, task_t** task);
 
 /**
  * Release the current task and move to the next one

@@ -12,6 +12,7 @@
 #else
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
@@ -142,20 +143,35 @@ static void update_cache(worker_t* worker, const char* buf, uint16_t size,
                          tunnel_entity_t* tun, tunnel_endpoint_t* cur_endpoint);
 static unsigned short checksum(void *b, int len);
 
+#ifndef _WIN32
+#define FUTEX_WAIT_CMD 0
+#define FUTEX_WAKE_CMD 1
+
+static void futex_wait(atomic_int* futex, int expected) {
+    syscall(SYS_futex, (void*)futex, FUTEX_WAIT_CMD, expected, NULL, NULL, 0);
+}
+
+static void futex_wake(atomic_int* futex, int count) {
+    syscall(SYS_futex, (void*)futex, FUTEX_WAKE_CMD, count, NULL, NULL, 0);
+}
+#endif
+
 #ifdef _WIN32
 #define WORKER_MUTEX_LOCK(w) EnterCriticalSection(&(w)->mutex)
 #define WORKER_MUTEX_UNLOCK(w) LeaveCriticalSection(&(w)->mutex)
 #define WORKER_CACHE_LOCK(w) EnterCriticalSection(&(w)->tun_cache_mutex)
 #define WORKER_CACHE_UNLOCK(w) LeaveCriticalSection(&(w)->tun_cache_mutex)
-#define WORKER_COND_WAIT(w) SleepConditionVariableCS(&(w)->cond_empty, &(w)->mutex, INFINITE)
+#define WORKER_COND_WAIT(w, expected) SleepConditionVariableCS(&(w)->cond_empty, &(w)->mutex, INFINITE)
 #define WORKER_COND_SIGNAL(w) WakeConditionVariable(&(w)->cond_empty)
 #else
 #define WORKER_MUTEX_LOCK(w) pthread_mutex_lock(&(w)->mutex)
 #define WORKER_MUTEX_UNLOCK(w) pthread_mutex_unlock(&(w)->mutex)
 #define WORKER_CACHE_LOCK(w) pthread_mutex_lock(&(w)->tun_cache_mutex)
 #define WORKER_CACHE_UNLOCK(w) pthread_mutex_unlock(&(w)->tun_cache_mutex)
-#define WORKER_COND_WAIT(w) pthread_cond_wait(&(w)->cond_empty, &(w)->mutex)
-#define WORKER_COND_SIGNAL(w) pthread_cond_signal(&(w)->cond_empty)
+// #define WORKER_COND_WAIT(w) pthread_cond_wait(&(w)->cond_empty, &(w)->mutex)
+// #define WORKER_COND_SIGNAL(w) pthread_cond_signal(&(w)->cond_empty)
+#define WORKER_COND_WAIT(w, expected) futex_wait(&(w)->futex_word, (expected))
+#define WORKER_COND_SIGNAL(w) do { atomic_fetch_add(&(w)->futex_word, 1); futex_wake(&(w)->futex_word, 1); } while (0)
 #endif
 
 #ifdef _WIN32
@@ -186,8 +202,12 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     worker->tun_cache_ht = NULL;
     time_wheel_init(&worker->time_wheel, TUN_CACHE_KEY_LEN);
     time_wheel_init(&worker->dyn_wheel, IP_PORT_KEY_LEN);
-    worker->new_task_idx = 0;
-    worker->cur_task_idx = 0;
+    // worker->new_task_idx = 0;
+    // worker->cur_task_idx = 0;
+    atomic_store(&worker->new_task_idx, 0);
+    atomic_store(&worker->cur_task_idx, 0);
+    atomic_store(&worker->full_flag, 0);
+    atomic_store(&worker->futex_word, 0);
     worker->dyn_endpoints_enabled = 0;
     worker->current_tun = NULL;
 
@@ -259,9 +279,15 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
  * @param worker Worker structure
  * @param task Pointer to store the task
  */
-void task_get_new(worker_t* worker, task_t** task) {
-    WORKER_MUTEX_LOCK(worker);
-    *task = &worker->task_buf[worker->new_task_idx];
+// void task_get_new(worker_t* worker, task_t** task) {
+int task_get_new(worker_t* worker, task_t** task) {
+    if (atomic_load(&worker->full_flag)) {
+        return -1;
+    }
+    // WORKER_MUTEX_LOCK(worker);
+    // *task = &worker->task_buf[worker->new_task_idx];
+    *task = &worker->task_buf[atomic_load(&worker->new_task_idx)];
+    return 0;
 }
 
 /**
@@ -269,14 +295,21 @@ void task_get_new(worker_t* worker, task_t** task) {
  * @param worker Worker structure
  */
 void task_add(worker_t* worker) {
-    if (worker->new_task_idx == MAX_TASKS - 1) {
-        worker->new_task_idx = 0;
+    // if (worker->new_task_idx == MAX_TASKS - 1) {
+    if (atomic_load(&worker->new_task_idx) == MAX_TASKS - 1) {
+        // worker->new_task_idx = 0;
+        atomic_store(&worker->new_task_idx, 0);
     } else {
-        ++worker->new_task_idx;
+        // ++worker->new_task_idx;
+        atomic_fetch_add(&worker->new_task_idx, 1);
     }
 
-    WORKER_COND_SIGNAL(worker);
-    WORKER_MUTEX_UNLOCK(worker);
+    if (atomic_load(&worker->new_task_idx) == atomic_load(&worker->cur_task_idx)) {
+        atomic_store(&worker->full_flag, 1);
+    }
+
+    WORKER_COND_SIGNAL(worker); //wake up thread
+    // WORKER_MUTEX_UNLOCK(worker);
 }
 
 /**
@@ -360,21 +393,25 @@ static void *thread_func(void *param)
     worker_t* worker = (worker_t*)param;
 
     while (1) {
-        WORKER_MUTEX_LOCK(worker);
+        // WORKER_MUTEX_LOCK(worker);
 
-        if (worker->cur_task_idx == worker->new_task_idx) {
+        int futex_expected = atomic_load(&worker->futex_word);
+
+        // if (worker->cur_task_idx == worker->new_task_idx) {
+        if (atomic_load(&worker->cur_task_idx) == atomic_load(&worker->new_task_idx) &&
+            !atomic_load(&worker->full_flag)) {
 #ifdef DEBUG
             fprintf(stdout, "Worker thread is idle\n");
 #endif
-            WORKER_COND_WAIT(worker);
+            WORKER_COND_WAIT(worker, futex_expected);
 #ifdef DEBUG
             fprintf(stdout, "Worker thread resumed\n");
 #endif
-            WORKER_MUTEX_UNLOCK(worker);
+            // WORKER_MUTEX_UNLOCK(worker);
             continue;
         }
 
-        task_t* current_task = &worker->task_buf[worker->cur_task_idx];
+        task_t* current_task = &worker->task_buf[atomic_load(&worker->cur_task_idx)];
         fd_tun_map_t* current_tun_map = current_task->tun_map;
         tunnel_entity_t* current_tun = current_tun_map->tun;
         enc_entinty_t* current_encryptor = current_tun->encryptor;
@@ -546,13 +583,17 @@ static void *thread_func(void *param)
             }
         }
 
-        if (worker->cur_task_idx == MAX_TASKS - 1) {
-            worker->cur_task_idx = 0;
+        if (atomic_load(&worker->cur_task_idx) == MAX_TASKS - 1) {
+            // worker->cur_task_idx = 0;
+            atomic_store(&worker->cur_task_idx, 0);
         } else {
-            ++worker->cur_task_idx;
+            // ++worker->cur_task_idx;
+            atomic_fetch_add(&worker->cur_task_idx, 1);
         }
 
-        WORKER_MUTEX_UNLOCK(worker);
+        atomic_store(&worker->full_flag, 0);
+
+        // WORKER_MUTEX_UNLOCK(worker);
     }
 
 #ifdef _WIN32

@@ -1537,7 +1537,11 @@ static int tunnel_poll(void) {
                 continue;
             }
 
-            task_get_new(current_tun->worker, &new_task);
+            if (task_get_new(current_tun->worker, &new_task)) {
+                PrintError("The task buffer is full. Dropping...\n");
+                continue;
+            }
+
             memcpy(new_task->buffer, localbuf, bytes);
             new_task->tun_map = found_map;
             new_task->size = (uint16_t)bytes;
@@ -1696,7 +1700,11 @@ static DWORD WINAPI wintun_reader_thread_func(LPVOID param) {
         if (pkt) {
             if (pkt_size > 0) {
                 task_t* new_task = NULL;
-                task_get_new(ctx->tun->worker, &new_task);
+                // task_get_new(ctx->tun->worker, &new_task);
+                if (task_get_new(ctx->tun->worker, &new_task)) {
+                    PrintError("The task buffer is full. Dropping...\n");
+                    continue;
+                }
                 memcpy(new_task->buffer, pkt, pkt_size);
                 new_task->tun_map = ctx->tun_map;
                 new_task->size = (uint16_t)pkt_size;
@@ -1767,7 +1775,11 @@ static DWORD WINAPI iocp_thread_func(LPVOID param) {
             case IOCP_OP_TAP_READ: {
                 if (bytes > 0) {
                     task_t* new_task = NULL;
-                    task_get_new(ctx->tun->worker, &new_task);
+                    // task_get_new(ctx->tun->worker, &new_task);
+                    if (task_get_new(ctx->tun->worker, &new_task)) {
+                       PrintError("The task buffer is full. Dropping...\n");
+                        continue;
+                    }
                     memcpy(new_task->buffer, ctx->buf, bytes);
                     new_task->tun_map = ctx->tun_map;
                     new_task->size = (uint16_t)bytes;
@@ -1781,7 +1793,11 @@ static DWORD WINAPI iocp_thread_func(LPVOID param) {
             case IOCP_OP_SOCK_READ: {
                 if (bytes > 0) {
                     task_t* new_task = NULL;
-                    task_get_new(ctx->tun->worker, &new_task);
+                    // task_get_new(ctx->tun->worker, &new_task);
+                    if (task_get_new(ctx->tun->worker, &new_task)) {
+                        PrintError("The task buffer is full. Dropping...\n");
+                        continue;
+                    }
                     memcpy(new_task->buffer, ctx->buf, bytes);
                     new_task->tun_map = ctx->tun_map;
                     new_task->size = (uint16_t)bytes;
