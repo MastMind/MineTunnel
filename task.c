@@ -168,8 +168,6 @@ static void futex_wake(atomic_int* futex, int count) {
 #define WORKER_MUTEX_UNLOCK(w) pthread_mutex_unlock(&(w)->mutex)
 #define WORKER_CACHE_LOCK(w) pthread_mutex_lock(&(w)->tun_cache_mutex)
 #define WORKER_CACHE_UNLOCK(w) pthread_mutex_unlock(&(w)->tun_cache_mutex)
-// #define WORKER_COND_WAIT(w) pthread_cond_wait(&(w)->cond_empty, &(w)->mutex)
-// #define WORKER_COND_SIGNAL(w) pthread_cond_signal(&(w)->cond_empty)
 #define WORKER_COND_WAIT(w, expected) futex_wait(&(w)->futex_word, (expected))
 #define WORKER_COND_SIGNAL(w) do { atomic_fetch_add(&(w)->futex_word, 1); futex_wake(&(w)->futex_word, 1); } while (0)
 #endif
@@ -202,8 +200,6 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     worker->tun_cache_ht = NULL;
     time_wheel_init(&worker->time_wheel, TUN_CACHE_KEY_LEN);
     time_wheel_init(&worker->dyn_wheel, IP_PORT_KEY_LEN);
-    // worker->new_task_idx = 0;
-    // worker->cur_task_idx = 0;
     atomic_store(&worker->new_task_idx, 0);
     atomic_store(&worker->cur_task_idx, 0);
     atomic_store(&worker->full_flag, 0);
@@ -279,13 +275,10 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
  * @param worker Worker structure
  * @param task Pointer to store the task
  */
-// void task_get_new(worker_t* worker, task_t** task) {
 int task_get_new(worker_t* worker, task_t** task) {
     if (atomic_load(&worker->full_flag)) {
         return -1;
     }
-    // WORKER_MUTEX_LOCK(worker);
-    // *task = &worker->task_buf[worker->new_task_idx];
     *task = &worker->task_buf[atomic_load(&worker->new_task_idx)];
     return 0;
 }
@@ -295,12 +288,9 @@ int task_get_new(worker_t* worker, task_t** task) {
  * @param worker Worker structure
  */
 void task_add(worker_t* worker) {
-    // if (worker->new_task_idx == MAX_TASKS - 1) {
     if (atomic_load(&worker->new_task_idx) == MAX_TASKS - 1) {
-        // worker->new_task_idx = 0;
         atomic_store(&worker->new_task_idx, 0);
     } else {
-        // ++worker->new_task_idx;
         atomic_fetch_add(&worker->new_task_idx, 1);
     }
 
@@ -309,7 +299,6 @@ void task_add(worker_t* worker) {
     }
 
     WORKER_COND_SIGNAL(worker); //wake up thread
-    // WORKER_MUTEX_UNLOCK(worker);
 }
 
 /**
@@ -393,11 +382,8 @@ static void *thread_func(void *param)
     worker_t* worker = (worker_t*)param;
 
     while (1) {
-        // WORKER_MUTEX_LOCK(worker);
-
         int futex_expected = atomic_load(&worker->futex_word);
 
-        // if (worker->cur_task_idx == worker->new_task_idx) {
         if (atomic_load(&worker->cur_task_idx) == atomic_load(&worker->new_task_idx) &&
             !atomic_load(&worker->full_flag)) {
 #ifdef DEBUG
@@ -407,7 +393,6 @@ static void *thread_func(void *param)
 #ifdef DEBUG
             fprintf(stdout, "Worker thread resumed\n");
 #endif
-            // WORKER_MUTEX_UNLOCK(worker);
             continue;
         }
 
@@ -584,16 +569,12 @@ static void *thread_func(void *param)
         }
 
         if (atomic_load(&worker->cur_task_idx) == MAX_TASKS - 1) {
-            // worker->cur_task_idx = 0;
             atomic_store(&worker->cur_task_idx, 0);
         } else {
-            // ++worker->cur_task_idx;
             atomic_fetch_add(&worker->cur_task_idx, 1);
         }
 
         atomic_store(&worker->full_flag, 0);
-
-        // WORKER_MUTEX_UNLOCK(worker);
     }
 
 #ifdef _WIN32

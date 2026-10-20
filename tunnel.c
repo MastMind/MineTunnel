@@ -1700,7 +1700,6 @@ static DWORD WINAPI wintun_reader_thread_func(LPVOID param) {
         if (pkt) {
             if (pkt_size > 0) {
                 task_t* new_task = NULL;
-                // task_get_new(ctx->tun->worker, &new_task);
                 if (task_get_new(ctx->tun->worker, &new_task)) {
                     PrintError("The task buffer is full. Dropping...\n");
                     continue;
@@ -1775,7 +1774,6 @@ static DWORD WINAPI iocp_thread_func(LPVOID param) {
             case IOCP_OP_TAP_READ: {
                 if (bytes > 0) {
                     task_t* new_task = NULL;
-                    // task_get_new(ctx->tun->worker, &new_task);
                     if (task_get_new(ctx->tun->worker, &new_task)) {
                        PrintError("The task buffer is full. Dropping...\n");
                         continue;
@@ -1793,7 +1791,6 @@ static DWORD WINAPI iocp_thread_func(LPVOID param) {
             case IOCP_OP_SOCK_READ: {
                 if (bytes > 0) {
                     task_t* new_task = NULL;
-                    // task_get_new(ctx->tun->worker, &new_task);
                     if (task_get_new(ctx->tun->worker, &new_task)) {
                         PrintError("The task buffer is full. Dropping...\n");
                         continue;

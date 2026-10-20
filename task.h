@@ -103,7 +103,6 @@ void task_create_worker(worker_t* worker, struct tunnel_entity_s* tun);
  * @param worker Worker structure
  * @param task Pointer to store the task
  */
-// void task_get_new(worker_t* worker, task_t** task);
 int task_get_new(worker_t* worker, task_t** task);
 
 /**
