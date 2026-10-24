@@ -50,18 +50,15 @@ typedef struct worker_s {
 #ifdef _WIN32
     HANDLE              thr;
     HANDLE              tun_cache_thr;
-    CRITICAL_SECTION    mutex;
     CRITICAL_SECTION    tun_cache_mutex;
     CRITICAL_SECTION    task_cs;
-    CONDITION_VARIABLE  cond_empty;
+    atomic_int          futex_word;
 #else
     pthread_t           thr;
     pthread_attr_t      attr;
-    pthread_mutex_t     mutex;
     pthread_t           tun_cache_thr;
     pthread_attr_t      tun_cache_attr;
     pthread_mutex_t     tun_cache_mutex;
-    pthread_cond_t      cond_empty;
     atomic_int          futex_word;
 #endif
     task_t*             task_buf;

@@ -4,7 +4,7 @@ set BUILD_DIR=build
 REM set CXXFLAGS=-I. -Wall -Werror -c -s -static -D_WIN32_WINNT=0x0601 -g
 REM set LDFLAGS=-L. -lsetupapi -lole32 -luuid -lwsock32 -lws2_32 -s -static -g
 set CXXFLAGS=-I. -Wall -Werror -c -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -DNTDDI_VERSION=0x06010000 -O1 -static -s -Wl,--heap,4294967296 -Wno-unknown-pragmas
-set LDFLAGS=-L. -lsetupapi -lole32 -luuid -lwsock32 -lws2_32 -liphlpapi -lfwpuclnt -lrpcrt4 -O1 -static -s -Wl,--heap,4294967296
+set LDFLAGS=-L. -lsetupapi -lole32 -luuid -lwsock32 -lws2_32 -liphlpapi -lfwpuclnt -lrpcrt4 -lsynchronization -O1 -static -s -Wl,--heap,4294967296
 set PROGNAME=minetunnel
 rd /S /Q %BUILD_DIR%
 mkdir %BUILD_DIR%
