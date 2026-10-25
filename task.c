@@ -157,11 +157,15 @@ static void futex_wake(atomic_int* futex, int count) {
 #endif
 
 #ifdef _WIN32
+#define WORKER_MUTEX_LOCK(w) EnterCriticalSection(&(w)->mutex)
+#define WORKER_MUTEX_UNLOCK(w) LeaveCriticalSection(&(w)->mutex)
 #define WORKER_CACHE_LOCK(w) EnterCriticalSection(&(w)->tun_cache_mutex)
 #define WORKER_CACHE_UNLOCK(w) LeaveCriticalSection(&(w)->tun_cache_mutex)
-#define WORKER_COND_WAIT(w, expected) WaitOnAddress((volatile void*)&(w)->futex_word, (void*)&(expected), sizeof(expected), INFINITE)
-#define WORKER_COND_SIGNAL(w) do { atomic_fetch_add(&(w)->futex_word, 1); WakeByAddressSingle((void*)&(w)->futex_word); } while (0)
+#define WORKER_COND_WAIT(w, expected) SleepConditionVariableCS(&(w)->cond_empty, &(w)->mutex, INFINITE)
+#define WORKER_COND_SIGNAL(w) WakeConditionVariable(&(w)->cond_empty)
 #else
+#define WORKER_MUTEX_LOCK(w) pthread_mutex_lock(&(w)->mutex)
+#define WORKER_MUTEX_UNLOCK(w) pthread_mutex_unlock(&(w)->mutex)
 #define WORKER_CACHE_LOCK(w) pthread_mutex_lock(&(w)->tun_cache_mutex)
 #define WORKER_CACHE_UNLOCK(w) pthread_mutex_unlock(&(w)->tun_cache_mutex)
 #define WORKER_COND_WAIT(w, expected) futex_wait(&(w)->futex_word, (expected))
@@ -199,7 +203,9 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     atomic_store(&worker->new_task_idx, 0);
     atomic_store(&worker->cur_task_idx, 0);
     atomic_store(&worker->full_flag, 0);
+#ifndef _WIN32
     atomic_store(&worker->futex_word, 0);
+#endif
     worker->dyn_endpoints_enabled = 0;
     worker->current_tun = NULL;
 
@@ -212,8 +218,10 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     }
 
 #ifdef _WIN32
+    InitializeCriticalSection(&worker->mutex);
     InitializeCriticalSection(&worker->tun_cache_mutex);
     InitializeCriticalSection(&worker->task_cs);
+    InitializeConditionVariable(&worker->cond_empty);
 
     worker->tun_cache_thr = CreateThread(NULL, 0, tun_cache_thread_func, worker, 0, NULL);
     if (!worker->tun_cache_thr) {
@@ -251,6 +259,8 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
                        dyn_endpoints_thread_func, worker);
     }
 
+    pthread_cond_init(&worker->cond_empty, NULL);
+    pthread_mutex_init(&worker->mutex, NULL);
     pthread_attr_init(&worker->attr);
     pthread_create(&worker->thr, &worker->attr, thread_func, worker);
 #endif
@@ -281,6 +291,9 @@ int task_get_new(worker_t* worker, task_t** task) {
  * @param worker Worker structure
  */
 void task_add(worker_t* worker) {
+#ifdef _WIN32
+    WORKER_MUTEX_LOCK(worker);
+#endif
     if (atomic_load(&worker->new_task_idx) == MAX_TASKS - 1) {
         atomic_store(&worker->new_task_idx, 0);
     } else {
@@ -292,6 +305,9 @@ void task_add(worker_t* worker) {
     }
 
     WORKER_COND_SIGNAL(worker); //wake up thread
+#ifdef _WIN32
+    WORKER_MUTEX_UNLOCK(worker);
+#endif
 }
 
 /**
@@ -312,8 +328,7 @@ void task_destroy_all_workers() {
         }
         free(w->task_buf);
 #ifdef _WIN32
-        atomic_fetch_add(&w->futex_word, 1);
-        WakeByAddressAll((void*)&w->futex_word);
+        WakeAllConditionVariable(&w->cond_empty);
 
         if (w->thr) {
             WaitForSingleObject(w->thr, WAIT_FOR_OBJECT_DELAY);
@@ -336,11 +351,16 @@ void task_destroy_all_workers() {
             DeleteCriticalSection(&w->dyn_endpoints_mutex);
         }
 
+        DeleteCriticalSection(&w->mutex);
         DeleteCriticalSection(&w->tun_cache_mutex);
         DeleteCriticalSection(&w->task_cs);
 #else
+        pthread_mutex_unlock(&w->mutex);
+
         pthread_cancel(w->thr);
         pthread_attr_destroy(&w->attr);
+        pthread_cond_destroy(&w->cond_empty);
+        pthread_mutex_destroy(&w->mutex);
 
         pthread_cancel(w->tun_cache_thr);
         pthread_attr_destroy(&w->tun_cache_attr);
@@ -372,14 +392,25 @@ static void *thread_func(void *param)
     worker_t* worker = (worker_t*)param;
 
     while (1) {
+#ifndef _WIN32
         int futex_expected = atomic_load(&worker->futex_word);
+#endif
 
         if (atomic_load(&worker->cur_task_idx) == atomic_load(&worker->new_task_idx) &&
             !atomic_load(&worker->full_flag)) {
 #ifdef DEBUG
             fprintf(stdout, "Worker thread is idle\n");
 #endif
+#ifdef _WIN32
+            WORKER_MUTEX_LOCK(worker);
+            while (atomic_load(&worker->cur_task_idx) == atomic_load(&worker->new_task_idx) &&
+                   !atomic_load(&worker->full_flag)) {
+                WORKER_COND_WAIT(worker, 0);
+            }
+            WORKER_MUTEX_UNLOCK(worker);
+#else
             WORKER_COND_WAIT(worker, futex_expected);
+#endif
 #ifdef DEBUG
             fprintf(stdout, "Worker thread resumed\n");
 #endif
