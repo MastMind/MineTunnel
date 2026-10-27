@@ -50,7 +50,7 @@ typedef struct worker_s {
 #ifdef _WIN32
     HANDLE              thr;
     HANDLE              tun_cache_thr;
-    CRITICAL_SECTION    mutex;
+    SRWLOCK             mutex;
     CRITICAL_SECTION    tun_cache_mutex;
     CONDITION_VARIABLE  cond_empty;
 #else

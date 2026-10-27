@@ -157,11 +157,11 @@ static void futex_wake(atomic_int* futex, int count) {
 #endif
 
 #ifdef _WIN32
-#define WORKER_MUTEX_LOCK(w) EnterCriticalSection(&(w)->mutex)
-#define WORKER_MUTEX_UNLOCK(w) LeaveCriticalSection(&(w)->mutex)
+#define WORKER_MUTEX_LOCK(w) AcquireSRWLockExclusive(&(w)->mutex)
+#define WORKER_MUTEX_UNLOCK(w) ReleaseSRWLockExclusive(&(w)->mutex)
 #define WORKER_CACHE_LOCK(w) EnterCriticalSection(&(w)->tun_cache_mutex)
 #define WORKER_CACHE_UNLOCK(w) LeaveCriticalSection(&(w)->tun_cache_mutex)
-#define WORKER_COND_WAIT(w) SleepConditionVariableCS(&(w)->cond_empty, &(w)->mutex, INFINITE)
+#define WORKER_COND_WAIT(w) SleepConditionVariableSRW(&(w)->cond_empty, &(w)->mutex, INFINITE, 0)
 #define WORKER_COND_SIGNAL(w) WakeConditionVariable(&(w)->cond_empty)
 #else
 #define WORKER_MUTEX_LOCK(w) pthread_mutex_lock(&(w)->mutex)
@@ -221,7 +221,7 @@ void task_create_worker(worker_t* worker, tunnel_entity_t* tun) {
     }
 
 #ifdef _WIN32
-    InitializeCriticalSection(&worker->mutex);
+    InitializeSRWLock(&worker->mutex);
     InitializeCriticalSection(&worker->tun_cache_mutex);
     InitializeConditionVariable(&worker->cond_empty);
 
@@ -367,7 +367,6 @@ void task_destroy_all_workers() {
             DeleteCriticalSection(&w->dyn_endpoints_mutex);
         }
 
-        DeleteCriticalSection(&w->mutex);
         DeleteCriticalSection(&w->tun_cache_mutex);
 #else
         pthread_mutex_unlock(&w->mutex);
