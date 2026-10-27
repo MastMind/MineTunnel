@@ -1537,7 +1537,11 @@ static int tunnel_poll(void) {
                 continue;
             }
 
-            task_get_new(current_tun->worker, &new_task);
+            if (task_get_new(current_tun->worker, &new_task)) {
+                PrintError("The task buffer is full. Dropping...\n");
+                continue;
+            }
+
             memcpy(new_task->buffer, localbuf, bytes);
             new_task->tun_map = found_map;
             new_task->size = (uint16_t)bytes;
